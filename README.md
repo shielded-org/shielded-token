@@ -1,4 +1,4 @@
-# zkproject
+# Shielded Token
 
 Privacy-focused shielded token system for EVM using:
 
@@ -8,10 +8,7 @@ Privacy-focused shielded token system for EVM using:
 - Relayer-mediated on-chain submission
 - Encrypted note discovery for recipients via viewing keys
 
-This repo implements a dual-rail model:
-
-- Public boundary rail for interoperability with ERC20
-- Private shielded rail for in-pool transfers
+This repo implements a **STRK20-style monolith**: a single `ShieldedToken` contract coordinates **public ERC20 balances** and the **embedded privacy pool** (Merkle commitments, nullifiers, proofs, encrypted note discovery). Moving value into the pool uses `shield` (burn public balance + insert commitment); private transfers and `unshield` operate on that same coordinator.
 
 ---
 
@@ -42,14 +39,14 @@ At public boundaries (deposit/unshield):
 - Boundary actions are on-chain and visible by EVM design
 - Deposit/unshield metadata can still be observable at entry/exit points
 
-This separation is intentional: private rail for confidentiality, boundary rail for ERC20 interoperability.
+Shielding and unshielding remain **boundary actions** on a public chain (visible entry/exit), while in-pool transfers aim for strong confidentiality.
 
 ---
 
 ## Monorepo structure
 
 - `packages/circuits`: Noir circuit (`main.nr`) for shielded transfer constraints
-- `packages/contracts`: Foundry contracts (verifier, tree, pool, adapter, token)
+- `packages/contracts`: Foundry contracts (verifier, tree, monolithic `ShieldedToken`, Poseidon helpers)
 - `services/relayer`: HTTP relayer for submitting shielded transfers on-chain
 - `scripts/hardhat-local-e2e.mjs`: complete local E2E orchestration
 - `apps/web`: frontend shell (not required for CLI E2E)
@@ -58,21 +55,15 @@ This separation is intentional: private rail for confidentiality, boundary rail 
 
 ## Contracts and what they do
 
-### `ShieldedPool.sol`
-Core private rail contract.
+### `ShieldedToken.sol` (monolith coordinator)
 
-- Verifies UltraHonk proofs for shielded transfer/unshield
-- Tracks spent nullifiers (`nullifierSet`)
-- Inserts new commitments into IMT
-- Emits `NewCommitment(bytes encryptedNote)` for recipient discovery
-- Holds underlying ERC20 tokens used for private balances
+Single contract combining:
 
-### `ShieldedPoolAdapter.sol`
-Public boundary adapter for deposit interoperability.
-
-- Pulls underlying ERC20 from depositor via `transferFrom`
-- Calls `depositFromAdapter` on pool with commitment + encrypted note
-- Makes deposit boundary explicit and isolated
+- **ERC20 surface**: `transfer`, `approve`, `transferFrom`, `balanceOf`, `totalSupply` for transparent interoperability
+- **Embedded pool**: `shield`, `shieldedTransfer`, `unshield`
+- **Nullifier set** and **UltraHonk** verification against the shared Merkle tree
+- **`tokenField`**: `bytes32(uint256(uint160(address(this))))` so the Noir circuit binds to this token address
+- **`NewCommitment`**: encrypted payloads for recipient-side discovery (optional on `shield` if calldata empty)
 
 ### `IncrementalMerkleTree.sol`
 On-chain note commitment tree.
@@ -83,9 +74,6 @@ On-chain note commitment tree.
 
 ### `HonkVerifier.sol` (generated)
 UltraHonk Solidity verifier generated from circuit VK using `bb contract`.
-
-### `ShieldedToken.sol`
-Underlying ERC20-like token contract currently used as the base asset in local flow.
 
 ### Poseidon contracts
 `Poseidon2`, `Poseidon2YulHasher`, `Poseidon2Hasher` are used to align hashing across circuit + EVM.
@@ -184,8 +172,8 @@ This script does all of the following:
 - Compiles circuit and contracts
 - Generates verifier from VK
 - Deploys Poseidon/hash adapter/verifier/tree
-- Deploys underlying token + shielded pool + adapter
-- Deposits initial notes via adapter
+- Deploys monolithic `ShieldedToken`
+- Deposits initial notes via `shield` (public balance → commitments)
 - Generates and submits 3 shielded transfers through relayer
 - Waits for on-chain confirmations
 - Scans and decrypts recipient notes via viewing keys
@@ -230,7 +218,7 @@ Encrypted note envelope fields:
 
 Discovery process:
 
-- Query `NewCommitment` logs from pool deploy block
+- Query `NewCommitment` logs from token deploy block
 - Attempt decrypt with recipient viewing private key
 - Successful decrypt means note belongs to that recipient
 
