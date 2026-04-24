@@ -4,6 +4,8 @@ pragma solidity ^0.8.28;
 import {IHonkVerifier} from "./interfaces/IHonkVerifier.sol";
 import {IIncrementalMerkleTree} from "./interfaces/IIncrementalMerkleTree.sol";
 
+/// @title ShieldedToken 
+/// @notice ERC20 surface + embedded privacy pool: commitments tree, nullifiers, proofs, encrypted note discovery.
 contract ShieldedToken {
     string public name;
     string public symbol;
@@ -28,8 +30,9 @@ contract ShieldedToken {
         bytes32 indexed commitment0,
         bytes32 commitment1
     );
-    event NewCommitment(bytes encryptedNote);
     event Unshield(bytes32 indexed nullifier, address indexed recipient, uint256 amount);
+    event NewCommitment(bytes encryptedNote);
+
     bytes32 private constant REDACTED = keccak256("REDACTED");
 
     error InvalidRoot();
@@ -81,12 +84,15 @@ contract ShieldedToken {
         return true;
     }
 
-    function shield(uint256 amount, bytes32 commitment) external {
+    /// @notice Move public ERC20 balance into the embedded shielded pool (burn + commitment insert).
+    function shield(uint256 amount, bytes32 commitment, bytes calldata encryptedNote) external {
         if (amount == 0) revert InvalidAmount();
         if (commitment == bytes32(0)) revert InvalidCommitment();
         _burnWithoutEvent(msg.sender, amount);
         merkleTree.insert(commitment);
-        // Keep event ABI stable while redacting sensitive payload values.
+        if (encryptedNote.length > 0) {
+            emit NewCommitment(encryptedNote);
+        }
         emit Shield(address(0), REDACTED, REDACTED, 0);
     }
 
@@ -124,7 +130,6 @@ contract ShieldedToken {
         merkleTree.insert(newCommitments[1]);
         emit NewCommitment(encryptedNotes[0]);
         emit NewCommitment(encryptedNotes[1]);
-        // Keep event ABI stable while redacting sensitivity from emitted fields.
         emit ShieldedTransfer(REDACTED, REDACTED, REDACTED, REDACTED);
     }
 
@@ -151,7 +156,6 @@ contract ShieldedToken {
 
         _checkAndMarkNullifier(nullifier);
         _mintWithoutEvent(recipient, amount);
-        // Keep event ABI stable while redacting sensitive payload values.
         emit Unshield(REDACTED, address(0), 0);
     }
 
@@ -197,5 +201,4 @@ contract ShieldedToken {
         }
         totalSupply -= amount;
     }
-
 }
