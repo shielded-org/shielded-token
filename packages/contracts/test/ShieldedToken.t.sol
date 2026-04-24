@@ -47,7 +47,7 @@ contract ShieldedTokenTest is Test {
         bytes32 commitment = keccak256("commitment_1");
 
         vm.prank(alice);
-        token.shield(100e18, commitment);
+        token.shield(100e18, commitment, new bytes(0));
 
         assertEq(token.balanceOf(alice), 900e18);
         assertTrue(tree.isKnownRoot(tree.getLastRoot()));
