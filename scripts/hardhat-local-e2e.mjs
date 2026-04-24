@@ -26,17 +26,14 @@ const DEPLOYER_KEY =
   process.env.LOCAL_PRIVATE_KEY ||
   "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
-const SHIELDED_POOL_ABI = [
+/// Monolithic ShieldedToken: ERC20 + embedded pool (STRK20-style coordinator).
+const SHIELDED_TOKEN_ABI = [
+  "function shield(uint256 amount, bytes32 commitment, bytes encryptedNote) external",
   "function shieldedTransfer(bytes proof, bytes32[2] nullifiers, bytes32[2] newCommitments, bytes[2] encryptedNotes, bytes32 merkleRoot, bytes32 token, uint64 fee) external",
   "function tokenField() external view returns (bytes32)",
   "function nullifierSet(bytes32) external view returns (bool)",
-  "function setAdapter(address adapter) external",
   "event NewCommitment(bytes encryptedNote)",
 ];
-const ERC20_ABI = [
-  "function approve(address spender, uint256 amount) external returns (bool)",
-];
-const ADAPTER_ABI = ["function deposit(uint256 amount, bytes32 commitment, bytes encryptedNote) external"];
 
 const MERKLE_ABI = [
   "function insert(bytes32 leaf) external",
@@ -172,14 +169,14 @@ function decryptNoteECDH(encryptedNoteHex, recipientViewingPriv) {
 
 async function scanAndDecryptNotes({
   provider,
-  poolAddress,
+  tokenAddress,
   fromBlock,
   viewer,
 }) {
-  const iface = new ethers.Interface(SHIELDED_POOL_ABI);
+  const iface = new ethers.Interface(SHIELDED_TOKEN_ABI);
   const topic = iface.getEvent("NewCommitment").topicHash;
   const logs = await provider.getLogs({
-    address: poolAddress,
+    address: tokenAddress,
     fromBlock,
     toBlock: "latest",
     topics: [topic],
@@ -315,8 +312,8 @@ async function executeTransferStep({
   stepName,
   poseidonRW,
   treeRW,
-  poolRW,
-  poolAddress,
+  tokenRW,
+  tokenAddress,
   tokenField,
   spendingKey,
   recipientViewingPub,
@@ -399,7 +396,7 @@ async function executeTransferStep({
 
   console.log(`== ${stepName}: submitting via relayer ==`);
   const relayerResult = await relayShieldedTransfer({
-    shieldedToken: poolAddress,
+    shieldedToken: tokenAddress,
     proof: proofHex,
     nullifiers: [nullifier0, nullifier1],
     newCommitments: [outCommitment0, outCommitment1],
@@ -411,8 +408,8 @@ async function executeTransferStep({
   });
   const confirmedStatus = await waitForRelayerConfirmation(relayerResult.requestId);
 
-  const nf0Used = await poolRW.nullifierSet(nullifier0);
-  const nf1Used = await poolRW.nullifierSet(nullifier1);
+  const nf0Used = await tokenRW.nullifierSet(nullifier0);
+  const nf1Used = await tokenRW.nullifierSet(nullifier1);
   console.log(`== ${stepName}: confirmed on-chain ==`);
   console.log({
     merkleRoot: rootOnChain,
@@ -494,7 +491,7 @@ async function main() {
   await tree.waitForDeployment();
   console.log(`IncrementalMerkleTree: ${await tree.getAddress()}`);
 
-  console.log("== Deploying underlying ERC20 token ==");
+  console.log("== Deploying ShieldedToken (monolith: ERC20 + embedded pool) ==");
   const tokenArtifact = loadForgeArtifact("ShieldedToken.sol/ShieldedToken.json");
   const tokenFactory = new ethers.ContractFactory(tokenArtifact.abi, tokenArtifact.bytecode.object, signer);
   const initialSupply = ethers.parseEther("1000");
@@ -508,33 +505,14 @@ async function main() {
   );
   await token.waitForDeployment();
   const tokenAddress = await token.getAddress();
-  console.log(`UnderlyingToken: ${tokenAddress}`);
+  const tokenDeployReceipt = await token.deploymentTransaction().wait();
+  const tokenDeployBlock = tokenDeployReceipt?.blockNumber ?? 0;
+  console.log(`ShieldedToken: ${tokenAddress}`);
 
-  console.log("== Deploying strict private shielded pool ==");
-  const poolArtifact = loadForgeArtifact("ShieldedPool.sol/ShieldedPool.json");
-  const poolFactory = new ethers.ContractFactory(poolArtifact.abi, poolArtifact.bytecode.object, signer);
-  const pool = await poolFactory.deploy(await verifier.getAddress(), await tree.getAddress(), tokenAddress);
-  await pool.waitForDeployment();
-  const poolAddress = await pool.getAddress();
-  const poolDeployReceipt = await pool.deploymentTransaction().wait();
-  const poolDeployBlock = poolDeployReceipt?.blockNumber ?? 0;
-  console.log(`ShieldedPool: ${poolAddress}`);
-
-  console.log("== Deploying public boundary adapter ==");
-  const adapterArtifact = loadForgeArtifact("ShieldedPoolAdapter.sol/ShieldedPoolAdapter.json");
-  const adapterFactory = new ethers.ContractFactory(adapterArtifact.abi, adapterArtifact.bytecode.object, signer);
-  const adapter = await adapterFactory.deploy(tokenAddress, poolAddress);
-  await adapter.waitForDeployment();
-  const adapterAddress = await adapter.getAddress();
-  console.log(`ShieldedPoolAdapter: ${adapterAddress}`);
-
-  const tokenRW = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
-  const poolRW = new ethers.Contract(poolAddress, SHIELDED_POOL_ABI, signer);
-  const adapterRW = new ethers.Contract(adapterAddress, ADAPTER_ABI, signer);
+  const tokenRW = new ethers.Contract(tokenAddress, SHIELDED_TOKEN_ABI, signer);
   const treeRW = new ethers.Contract(await tree.getAddress(), MERKLE_ABI, signer);
-  await (await poolRW.setAdapter(adapterAddress)).wait();
 
-  const tokenField = await poolRW.tokenField();
+  const tokenField = await tokenRW.tokenField();
   const users = {
     owner: {name: "Owner", spendingKey: 123456789n, viewingPriv: 11111111n},
     userB: {name: "UserB", spendingKey: 777777n, viewingPriv: 22222222n},
@@ -547,7 +525,7 @@ async function main() {
   }
   const fee = 0n;
 
-  console.log("== Depositing six owner notes through public boundary adapter ==");
+  console.log("== Shielding six owner notes (burn public balance, insert commitments) ==");
   const initialNotesSpec = [
     {amount: 20n, blinding: 1111n},
     {amount: 20n, blinding: 2222n},
@@ -565,8 +543,7 @@ async function main() {
       {token: tokenField, amount: spec.amount.toString(), blinding: toHex32(spec.blinding), commitment},
       users.owner.viewingPub
     );
-    await (await tokenRW.approve(adapterAddress, spec.amount)).wait();
-    await (await adapterRW.deposit(spec.amount, commitment, encryptedDepositNote)).wait();
+    await (await tokenRW.shield(spec.amount, commitment, encryptedDepositNote)).wait();
     const index = allLeaves.length;
     allLeaves.push(commitment);
     ownerNotes.push({index, commitment, amount: spec.amount, blinding: spec.blinding, ownerPk: users.owner.ownerPk});
@@ -609,8 +586,8 @@ async function main() {
       stepName: plan.name,
       poseidonRW,
       treeRW,
-      poolRW,
-      poolAddress,
+      tokenRW,
+      tokenAddress,
       tokenField,
       spendingKey: users.owner.spendingKey,
       inNotes: [in0, in1],
@@ -653,8 +630,8 @@ async function main() {
     const viewer = users[key];
     const discovered = await scanAndDecryptNotes({
       provider,
-      poolAddress,
-      fromBlock: poolDeployBlock,
+      tokenAddress,
+      fromBlock: tokenDeployBlock,
       viewer,
     });
     console.log({
