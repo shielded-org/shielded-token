@@ -1,0 +1,16 @@
+{
+  "name": "@zkproject/sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "viem": "^2.38.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
