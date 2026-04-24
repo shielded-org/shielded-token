@@ -1,0 +1,670 @@
+import {execFileSync} from "node:child_process";
+import {readFileSync, writeFileSync} from "node:fs";
+import {
+  createCipheriv,
+  createDecipheriv,
+  createECDH,
+  hkdfSync,
+  randomBytes,
+} from "node:crypto";
+import path from "node:path";
+import {fileURLToPath} from "node:url";
+
+import {ethers} from "ethers";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const root = path.resolve(__dirname, "..");
+const contractsDir = path.join(root, "packages", "contracts");
+const circuitsDir = path.join(root, "packages", "circuits");
+
+const LOCAL_RPC_URL = process.env.LOCAL_RPC_URL || "http://127.0.0.1:8545";
+const RELAYER_URL = process.env.RELAYER_URL || "http://127.0.0.1:8787";
+const RELAYER_CONFIRM_TIMEOUT_MS = Number(process.env.RELAYER_CONFIRM_TIMEOUT_MS || 180_000);
+const RELAYER_POLL_INTERVAL_MS = Number(process.env.RELAYER_POLL_INTERVAL_MS || 2_000);
+const DEPLOYER_KEY =
+  process.env.LOCAL_PRIVATE_KEY ||
+  "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+
+const SHIELDED_POOL_ABI = [
+  "function shieldedTransfer(bytes proof, bytes32[2] nullifiers, bytes32[2] newCommitments, bytes[2] encryptedNotes, bytes32 merkleRoot, bytes32 token, uint64 fee) external",
+  "function tokenField() external view returns (bytes32)",
+  "function nullifierSet(bytes32) external view returns (bool)",
+  "function setAdapter(address adapter) external",
+  "event NewCommitment(bytes encryptedNote)",
+];
+const ERC20_ABI = [
+  "function approve(address spender, uint256 amount) external returns (bool)",
+];
+const ADAPTER_ABI = ["function deposit(uint256 amount, bytes32 commitment, bytes encryptedNote) external"];
+
+const MERKLE_ABI = [
+  "function insert(bytes32 leaf) external",
+  "function getLastRoot() external view returns (bytes32)",
+  "function isKnownRoot(bytes32 root) external view returns (bool)",
+  "function getNextIndex() external view returns (uint256)",
+];
+
+const HASHER_ABI = ["function hash2(bytes32 left, bytes32 right) external view returns (bytes32)"];
+const POSEIDON_ABI = [
+  "function hash_2(uint256 x, uint256 y) external pure returns (uint256)",
+  "function hash(uint256[] input) external pure returns (uint256)",
+];
+
+function loadForgeArtifact(relPath) {
+  const p = path.join(contractsDir, "out", relPath);
+  return JSON.parse(readFileSync(p, "utf8"));
+}
+
+function run(cmd, args, cwd) {
+  return execFileSync(cmd, args, {cwd, stdio: "inherit"});
+}
+
+async function relayShieldedTransfer(bundle) {
+  const res = await fetch(`${RELAYER_URL}/relay/shielded-transfer`, {
+    method: "POST",
+    headers: {"content-type": "application/json"},
+    body: JSON.stringify(bundle),
+  });
+  const payload = await res.json();
+  if (!res.ok) {
+    throw new Error(`Relayer rejected request (${res.status}): ${payload.error || "unknown error"}`);
+  }
+  return payload;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchRelayerStatus(requestId) {
+  const res = await fetch(`${RELAYER_URL}/relay/status/${requestId}`);
+  const payload = await res.json();
+  if (!res.ok) {
+    throw new Error(`Relayer status fetch failed (${res.status}): ${payload.error || "unknown error"}`);
+  }
+  return payload;
+}
+
+async function waitForRelayerConfirmation(requestId, timeoutMs = RELAYER_CONFIRM_TIMEOUT_MS) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const status = await fetchRelayerStatus(requestId);
+    if (status.status === "confirmed") return status;
+    if (status.status === "failed" || status.status === "timeout") {
+      throw new Error(`Relayer request failed: ${status.error || "unknown error"}`);
+    }
+    await sleep(RELAYER_POLL_INTERVAL_MS);
+  }
+  throw new Error(`Timed out waiting for relayer confirmation after ${timeoutMs}ms (requestId=${requestId})`);
+}
+
+function parseHexToBigInt(hex) {
+  return BigInt(hex);
+}
+
+function toHex32(v) {
+  return ethers.zeroPadValue(ethers.toBeHex(v), 32);
+}
+
+function hexToBytes(hex) {
+  return Buffer.from(hex.replace(/^0x/, ""), "hex");
+}
+
+function bytesToHex(bytes) {
+  return `0x${Buffer.from(bytes).toString("hex")}`;
+}
+
+function viewingPrivToPub(viewingPriv) {
+  const ecdh = createECDH("secp256k1");
+  ecdh.setPrivateKey(hexToBytes(toHex32(viewingPriv)));
+  return bytesToHex(ecdh.getPublicKey(undefined, "compressed"));
+}
+
+function encryptNoteECDH(note, recipientViewingPubHex) {
+  const eph = createECDH("secp256k1");
+  eph.generateKeys();
+  const sharedSecret = eph.computeSecret(hexToBytes(recipientViewingPubHex));
+  const salt = randomBytes(32);
+  const key = hkdfSync("sha256", sharedSecret, salt, Buffer.from("zkproject-note-v1"), 32);
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const plaintext = Buffer.from(JSON.stringify(note), "utf8");
+  const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  const envelope = {
+    v: 1,
+    eph: bytesToHex(eph.getPublicKey(undefined, "compressed")),
+    salt: bytesToHex(salt),
+    iv: bytesToHex(iv),
+    ct: bytesToHex(ciphertext),
+    tag: bytesToHex(tag),
+  };
+  return bytesToHex(Buffer.from(JSON.stringify(envelope), "utf8"));
+}
+
+function decryptNoteECDH(encryptedNoteHex, recipientViewingPriv) {
+  try {
+    const envelopeRaw = Buffer.from(encryptedNoteHex.replace(/^0x/, ""), "hex").toString("utf8");
+    const envelope = JSON.parse(envelopeRaw);
+    if (envelope.v !== 1) return null;
+    const recipientECDH = createECDH("secp256k1");
+    recipientECDH.setPrivateKey(hexToBytes(toHex32(recipientViewingPriv)));
+    const sharedSecret = recipientECDH.computeSecret(hexToBytes(envelope.eph));
+    const key = hkdfSync(
+      "sha256",
+      sharedSecret,
+      hexToBytes(envelope.salt),
+      Buffer.from("zkproject-note-v1"),
+      32
+    );
+    const decipher = createDecipheriv("aes-256-gcm", key, hexToBytes(envelope.iv));
+    decipher.setAuthTag(hexToBytes(envelope.tag));
+    const plaintext = Buffer.concat([
+      decipher.update(hexToBytes(envelope.ct)),
+      decipher.final(),
+    ]);
+    return JSON.parse(plaintext.toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+async function scanAndDecryptNotes({
+  provider,
+  poolAddress,
+  fromBlock,
+  viewer,
+}) {
+  const iface = new ethers.Interface(SHIELDED_POOL_ABI);
+  const topic = iface.getEvent("NewCommitment").topicHash;
+  const logs = await provider.getLogs({
+    address: poolAddress,
+    fromBlock,
+    toBlock: "latest",
+    topics: [topic],
+  });
+  const discovered = [];
+  for (const log of logs) {
+    const parsed = iface.parseLog(log);
+    if (!parsed) continue;
+    const encryptedNote = parsed.args.encryptedNote;
+    const note = decryptNoteECDH(encryptedNote, viewer.viewingPriv);
+    if (note) {
+      discovered.push({
+        blockNumber: log.blockNumber,
+        txHash: log.transactionHash,
+        note,
+      });
+    }
+  }
+  return discovered;
+}
+
+async function poseidonHash2(poseidon, a, b) {
+  const out = await poseidon.hash_2(a, b);
+  return toHex32(out);
+}
+
+async function noteCommitment(poseidon, owner, tokenField, amount, blinding) {
+  const out = await poseidon.hash([
+    owner,
+    parseHexToBigInt(tokenField),
+    amount,
+    blinding,
+  ]);
+  return toHex32(out);
+}
+
+async function nullifier(poseidon, spendingKey, commitmentHex) {
+  return await poseidonHash2(poseidon, spendingKey, parseHexToBigInt(commitmentHex));
+}
+
+async function buildZeroes(poseidon, depth) {
+  const zeroes = [];
+  let cur = 0n;
+  for (let i = 0; i < depth; i += 1) {
+    zeroes.push(cur);
+    cur = parseHexToBigInt(await poseidonHash2(poseidon, cur, cur));
+  }
+  return zeroes;
+}
+
+async function buildLevelMaps(poseidon, leaves, depth = 20) {
+  const zeroes = await buildZeroes(poseidon, depth);
+  const levels = [];
+  let current = new Map();
+  for (let i = 0; i < leaves.length; i += 1) {
+    current.set(i, parseHexToBigInt(leaves[i]));
+  }
+  levels.push(current);
+
+  for (let level = 0; level < depth; level += 1) {
+    const next = new Map();
+    const parentIndices = new Set();
+    for (const idx of current.keys()) {
+      parentIndices.add(idx >> 1);
+    }
+    for (const pIdx of parentIndices) {
+      const left = current.get(pIdx * 2) ?? zeroes[level];
+      const right = current.get(pIdx * 2 + 1) ?? zeroes[level];
+      const h = parseHexToBigInt(await poseidonHash2(poseidon, left, right));
+      next.set(pIdx, h);
+    }
+    current = next;
+    levels.push(current);
+  }
+
+  return {levels, zeroes};
+}
+
+function extractPath(levelMaps, zeroes, targetIndex, depth = 20) {
+  const siblings = [];
+  const directions = [];
+  let idx = targetIndex;
+  for (let level = 0; level < depth; level += 1) {
+    const map = levelMaps[level];
+    const siblingIdx = idx ^ 1;
+    siblings.push(toHex32(map.get(siblingIdx) ?? zeroes[level]));
+    directions.push((idx & 1) === 1);
+    idx >>= 1;
+  }
+
+  const rootMap = levelMaps[depth];
+  const root = toHex32(rootMap.get(0) ?? zeroes[depth - 1]);
+  return {
+    root,
+    siblings,
+    directions,
+  };
+}
+
+function writeProverToml(payload) {
+  const toml = `
+spending_key = "${payload.spending_key}"
+in_amounts = ["${payload.in_amounts[0]}", "${payload.in_amounts[1]}"]
+in_blindings = ["${payload.in_blindings[0]}", "${payload.in_blindings[1]}"]
+merkle_siblings = [
+  [${payload.merkle_siblings[0].map((x) => `"${x}"`).join(", ")}],
+  [${payload.merkle_siblings[1].map((x) => `"${x}"`).join(", ")}]
+]
+merkle_directions = [
+  [${payload.merkle_directions[0].map((x) => (x ? "true" : "false")).join(", ")}],
+  [${payload.merkle_directions[1].map((x) => (x ? "true" : "false")).join(", ")}]
+]
+out_amounts = ["${payload.out_amounts[0]}", "${payload.out_amounts[1]}"]
+out_recipient_pks = ["${payload.out_recipient_pks[0]}", "${payload.out_recipient_pks[1]}"]
+out_blindings = ["${payload.out_blindings[0]}", "${payload.out_blindings[1]}"]
+token = "${payload.token}"
+merkle_root = "${payload.merkle_root}"
+nullifiers = ["${payload.nullifiers[0]}", "${payload.nullifiers[1]}"]
+out_commitments = ["${payload.out_commitments[0]}", "${payload.out_commitments[1]}"]
+fee = "${payload.fee}"
+`.trimStart();
+
+  writeFileSync(path.join(circuitsDir, "Prover.toml"), toml, "utf8");
+}
+
+function readProofHex() {
+  const proofWithPublicInputs = readFileSync(path.join(circuitsDir, "target", "proof"));
+  const proofWithoutPublicInputs = proofWithPublicInputs.subarray(7 * 32);
+  return `0x${proofWithoutPublicInputs.toString("hex")}`;
+}
+
+async function executeTransferStep({
+  stepName,
+  poseidonRW,
+  treeRW,
+  poolRW,
+  poolAddress,
+  tokenField,
+  spendingKey,
+  recipientViewingPub,
+  changeViewingPub,
+  inNotes,
+  recipientPk,
+  recipientAmount,
+  changePk,
+  changeAmount,
+  outBlindings,
+  fee,
+}) {
+  if (inNotes.length !== 2) throw new Error(`${stepName}: expected exactly two input notes`);
+
+  const inCommitments = [inNotes[0].commitment, inNotes[1].commitment];
+  const inAmounts = [inNotes[0].amount, inNotes[1].amount];
+  const inBlindings = [inNotes[0].blinding, inNotes[1].blinding];
+  const nullifier0 = await nullifier(poseidonRW, spendingKey, inCommitments[0]);
+  const nullifier1 = await nullifier(poseidonRW, spendingKey, inCommitments[1]);
+
+  const outCommitment0 = await noteCommitment(poseidonRW, recipientPk, tokenField, recipientAmount, outBlindings[0]);
+  const outCommitment1 = await noteCommitment(poseidonRW, changePk, tokenField, changeAmount, outBlindings[1]);
+  const encryptedNote0 = encryptNoteECDH(
+    {
+      token: tokenField,
+      amount: recipientAmount.toString(),
+      blinding: toHex32(outBlindings[0]),
+      commitment: outCommitment0,
+    },
+    recipientViewingPub
+  );
+  const encryptedNote1 = encryptNoteECDH(
+    {
+      token: tokenField,
+      amount: changeAmount.toString(),
+      blinding: toHex32(outBlindings[1]),
+      commitment: outCommitment1,
+    },
+    changeViewingPub
+  );
+
+  const rootOnChain = await treeRW.getLastRoot();
+  if (!(await treeRW.isKnownRoot(rootOnChain))) throw new Error(`${stepName}: root is unknown`);
+
+  const allLeaves = [...inNotes[0].allLeavesSnapshot];
+  const {levels, zeroes} = await buildLevelMaps(poseidonRW, allLeaves, 20);
+  const path0 = extractPath(levels, zeroes, inNotes[0].index, 20);
+  const path1 = extractPath(levels, zeroes, inNotes[1].index, 20);
+  if (path0.root.toLowerCase() !== rootOnChain.toLowerCase()) {
+    throw new Error(`${stepName}: computed root ${path0.root} != on-chain root ${rootOnChain}`);
+  }
+
+  console.log(`\n== ${stepName}: preparing witness ==`);
+  console.log({phase: "witness_prepared", inputCount: 2, outputCount: 2});
+
+  writeProverToml({
+    spending_key: spendingKey.toString(),
+    in_amounts: inAmounts.map(String),
+    in_blindings: inBlindings.map((x) => toHex32(x)),
+    merkle_siblings: [path0.siblings, path1.siblings],
+    merkle_directions: [path0.directions, path1.directions],
+    out_amounts: [recipientAmount.toString(), changeAmount.toString()],
+    out_recipient_pks: [toHex32(recipientPk), toHex32(changePk)],
+    out_blindings: outBlindings.map((x) => toHex32(x)),
+    token: tokenField,
+    merkle_root: rootOnChain,
+    nullifiers: [nullifier0, nullifier1],
+    out_commitments: [outCommitment0, outCommitment1],
+    fee: fee.toString(),
+  });
+
+  console.log(`== ${stepName}: generating proof ==`);
+  run("nargo", ["execute", "witness"], circuitsDir);
+  run(
+    "bb",
+    ["prove", "-b", "target/shielded_transfer.json", "-w", "target/witness.gz", "-o", "target/proof"],
+    circuitsDir
+  );
+  const proofHex = readProofHex();
+
+  console.log(`== ${stepName}: submitting via relayer ==`);
+  const relayerResult = await relayShieldedTransfer({
+    shieldedToken: poolAddress,
+    proof: proofHex,
+    nullifiers: [nullifier0, nullifier1],
+    newCommitments: [outCommitment0, outCommitment1],
+    encryptedNotes: [encryptedNote0, encryptedNote1],
+    merkleRoot: rootOnChain,
+    token: tokenField,
+    fee: Number(fee),
+    gasLimit: 30_000_000,
+  });
+  const confirmedStatus = await waitForRelayerConfirmation(relayerResult.requestId);
+
+  const nf0Used = await poolRW.nullifierSet(nullifier0);
+  const nf1Used = await poolRW.nullifierSet(nullifier1);
+  console.log(`== ${stepName}: confirmed on-chain ==`);
+  console.log({
+    merkleRoot: rootOnChain,
+    nullifier0Used: nf0Used,
+    nullifier1Used: nf1Used,
+    relayerRequestId: relayerResult.requestId,
+    txHash: confirmedStatus.txHash ?? relayerResult.txHash,
+    status: confirmedStatus.status,
+    blockNumber: confirmedStatus.blockNumber,
+  });
+
+  return {
+    consumed: inNotes.map((n) => n.index),
+    created: [
+      {commitment: outCommitment0, amount: recipientAmount, blinding: outBlindings[0], ownerPk: recipientPk},
+      {commitment: outCommitment1, amount: changeAmount, blinding: outBlindings[1], ownerPk: changePk},
+    ],
+  };
+}
+
+async function main() {
+  console.log("== Building contracts and circuit ==");
+  run("nargo", ["compile"], circuitsDir);
+  run("bb", ["write_vk", "-b", "target/shielded_transfer.json", "-o", "target/vk"], circuitsDir);
+  run("bb", ["contract", "-k", "target/vk", "-o", "target/contract.sol"], circuitsDir);
+  writeFileSync(
+    path.join(contractsDir, "src", "HonkVerifier.sol"),
+    readFileSync(path.join(circuitsDir, "target", "contract.sol"), "utf8")
+  );
+  run("forge", ["build"], contractsDir);
+
+  const provider = new ethers.JsonRpcProvider(LOCAL_RPC_URL);
+  const baseSigner = new ethers.Wallet(DEPLOYER_KEY, provider);
+  const signer = new ethers.NonceManager(baseSigner);
+
+  console.log(`Using local chain: ${LOCAL_RPC_URL}`);
+  console.log(`Deployer: ${await signer.getAddress()}`);
+
+  console.log("== Deploying local Poseidon2 ==");
+  const poseidonArtifact = loadForgeArtifact("Poseidon2.sol/Poseidon2.json");
+  const poseidonFactory = new ethers.ContractFactory(
+    poseidonArtifact.abi,
+    poseidonArtifact.bytecode.object,
+    signer
+  );
+  const poseidon = await poseidonFactory.deploy();
+  await poseidon.waitForDeployment();
+  console.log(`Poseidon2: ${await poseidon.getAddress()}`);
+  const poseidonRW = new ethers.Contract(await poseidon.getAddress(), POSEIDON_ABI, provider);
+
+  console.log("== Deploying Poseidon2YulHasher adapter ==");
+  const hasherAdapterArtifact = loadForgeArtifact("Poseidon2YulHasher.sol/Poseidon2YulHasher.json");
+  const hasherAdapterFactory = new ethers.ContractFactory(
+    hasherAdapterArtifact.abi,
+    hasherAdapterArtifact.bytecode.object,
+    signer
+  );
+  const hasherAdapter = await hasherAdapterFactory.deploy(await poseidon.getAddress());
+  await hasherAdapter.waitForDeployment();
+  const poseidon2HasherAddress = await hasherAdapter.getAddress();
+  const hasher = new ethers.Contract(poseidon2HasherAddress, HASHER_ABI, provider);
+  console.log(`Poseidon2Hasher: ${poseidon2HasherAddress}`);
+
+  console.log("== Deploying verifier ==");
+  const verifierArtifact = loadForgeArtifact("HonkVerifier.sol/UltraVerifier.json");
+  const verifierFactory = new ethers.ContractFactory(
+    verifierArtifact.abi,
+    verifierArtifact.bytecode.object,
+    signer
+  );
+  const verifier = await verifierFactory.deploy();
+  await verifier.waitForDeployment();
+  console.log(`HonkVerifier: ${await verifier.getAddress()}`);
+
+  console.log("== Deploying tree ==");
+  const treeArtifact = loadForgeArtifact("IncrementalMerkleTree.sol/IncrementalMerkleTree.json");
+  const treeFactory = new ethers.ContractFactory(treeArtifact.abi, treeArtifact.bytecode.object, signer);
+  const tree = await treeFactory.deploy(poseidon2HasherAddress);
+  await tree.waitForDeployment();
+  console.log(`IncrementalMerkleTree: ${await tree.getAddress()}`);
+
+  console.log("== Deploying underlying ERC20 token ==");
+  const tokenArtifact = loadForgeArtifact("ShieldedToken.sol/ShieldedToken.json");
+  const tokenFactory = new ethers.ContractFactory(tokenArtifact.abi, tokenArtifact.bytecode.object, signer);
+  const initialSupply = ethers.parseEther("1000");
+  const token = await tokenFactory.deploy(
+    "Shielded Token",
+    "SHLD",
+    await verifier.getAddress(),
+    await tree.getAddress(),
+    await signer.getAddress(),
+    initialSupply
+  );
+  await token.waitForDeployment();
+  const tokenAddress = await token.getAddress();
+  console.log(`UnderlyingToken: ${tokenAddress}`);
+
+  console.log("== Deploying strict private shielded pool ==");
+  const poolArtifact = loadForgeArtifact("ShieldedPool.sol/ShieldedPool.json");
+  const poolFactory = new ethers.ContractFactory(poolArtifact.abi, poolArtifact.bytecode.object, signer);
+  const pool = await poolFactory.deploy(await verifier.getAddress(), await tree.getAddress(), tokenAddress);
+  await pool.waitForDeployment();
+  const poolAddress = await pool.getAddress();
+  const poolDeployReceipt = await pool.deploymentTransaction().wait();
+  const poolDeployBlock = poolDeployReceipt?.blockNumber ?? 0;
+  console.log(`ShieldedPool: ${poolAddress}`);
+
+  console.log("== Deploying public boundary adapter ==");
+  const adapterArtifact = loadForgeArtifact("ShieldedPoolAdapter.sol/ShieldedPoolAdapter.json");
+  const adapterFactory = new ethers.ContractFactory(adapterArtifact.abi, adapterArtifact.bytecode.object, signer);
+  const adapter = await adapterFactory.deploy(tokenAddress, poolAddress);
+  await adapter.waitForDeployment();
+  const adapterAddress = await adapter.getAddress();
+  console.log(`ShieldedPoolAdapter: ${adapterAddress}`);
+
+  const tokenRW = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
+  const poolRW = new ethers.Contract(poolAddress, SHIELDED_POOL_ABI, signer);
+  const adapterRW = new ethers.Contract(adapterAddress, ADAPTER_ABI, signer);
+  const treeRW = new ethers.Contract(await tree.getAddress(), MERKLE_ABI, signer);
+  await (await poolRW.setAdapter(adapterAddress)).wait();
+
+  const tokenField = await poolRW.tokenField();
+  const users = {
+    owner: {name: "Owner", spendingKey: 123456789n, viewingPriv: 11111111n},
+    userB: {name: "UserB", spendingKey: 777777n, viewingPriv: 22222222n},
+    userC: {name: "UserC", spendingKey: 888888n, viewingPriv: 33333333n},
+    userD: {name: "UserD", spendingKey: 999999n, viewingPriv: 44444444n},
+  };
+  for (const user of Object.values(users)) {
+    user.ownerPk = parseHexToBigInt(await poseidonHash2(poseidonRW, user.spendingKey, 1n));
+    user.viewingPub = viewingPrivToPub(user.viewingPriv);
+  }
+  const fee = 0n;
+
+  console.log("== Depositing six owner notes through public boundary adapter ==");
+  const initialNotesSpec = [
+    {amount: 20n, blinding: 1111n},
+    {amount: 20n, blinding: 2222n},
+    {amount: 20n, blinding: 3333n},
+    {amount: 20n, blinding: 4444n},
+    {amount: 20n, blinding: 5555n},
+    {amount: 20n, blinding: 6666n},
+  ];
+  const allLeaves = [];
+  const ownerNotes = [];
+  for (let i = 0; i < initialNotesSpec.length; i += 1) {
+    const spec = initialNotesSpec[i];
+    const commitment = await noteCommitment(poseidonRW, users.owner.ownerPk, tokenField, spec.amount, spec.blinding);
+    const encryptedDepositNote = encryptNoteECDH(
+      {token: tokenField, amount: spec.amount.toString(), blinding: toHex32(spec.blinding), commitment},
+      users.owner.viewingPub
+    );
+    await (await tokenRW.approve(adapterAddress, spec.amount)).wait();
+    await (await adapterRW.deposit(spec.amount, commitment, encryptedDepositNote)).wait();
+    const index = allLeaves.length;
+    allLeaves.push(commitment);
+    ownerNotes.push({index, commitment, amount: spec.amount, blinding: spec.blinding, ownerPk: users.owner.ownerPk});
+    console.log(`Shielded note #${i + 1}: inserted`);
+  }
+
+  run("bb", ["write_vk", "-b", "target/shielded_transfer.json", "-o", "target/vk"], circuitsDir);
+
+  const transferPlan = [
+    {
+      name: "Transfer 1 (Owner -> UserB)",
+      recipient: users.userB,
+      recipientAmount: 35n,
+      changeAmount: 5n,
+    },
+    {
+      name: "Transfer 2 (Owner -> UserC)",
+      recipient: users.userC,
+      recipientAmount: 33n,
+      changeAmount: 7n,
+    },
+    {
+      name: "Transfer 3 (Owner -> UserD)",
+      recipient: users.userD,
+      recipientAmount: 34n,
+      changeAmount: 6n,
+    },
+  ];
+
+  const results = [];
+  for (const plan of transferPlan) {
+    if (ownerNotes.length < 2) throw new Error(`${plan.name}: not enough owner notes to spend`);
+    const in0 = ownerNotes.shift();
+    const in1 = ownerNotes.shift();
+    in0.allLeavesSnapshot = [...allLeaves];
+    in1.allLeavesSnapshot = [...allLeaves];
+
+    const outBlindings = [BigInt(7000 + results.length * 10 + 1), BigInt(7000 + results.length * 10 + 2)];
+    const stepResult = await executeTransferStep({
+      stepName: plan.name,
+      poseidonRW,
+      treeRW,
+      poolRW,
+      poolAddress,
+      tokenField,
+      spendingKey: users.owner.spendingKey,
+      inNotes: [in0, in1],
+      recipientPk: plan.recipient.ownerPk,
+      recipientViewingPub: plan.recipient.viewingPub,
+      recipientAmount: plan.recipientAmount,
+      changePk: users.owner.ownerPk,
+      changeViewingPub: users.owner.viewingPub,
+      changeAmount: plan.changeAmount,
+      outBlindings,
+      fee,
+    });
+
+    for (const created of stepResult.created) {
+      const index = allLeaves.length;
+      allLeaves.push(created.commitment);
+      if (created.ownerPk === users.owner.ownerPk) {
+        ownerNotes.push({
+          index,
+          commitment: created.commitment,
+          amount: created.amount,
+          blinding: created.blinding,
+          ownerPk: created.ownerPk,
+        });
+      }
+    }
+    results.push({name: plan.name, consumed: stepResult.consumed, created: stepResult.created});
+  }
+
+  console.log("\n== Multi-transfer E2E success ==");
+  console.log({
+    transfersExecuted: results.length,
+    finalOwnerUnspentNotes: ownerNotes.length,
+    finalRoot: await treeRW.getLastRoot(),
+    tokenField,
+  });
+
+  console.log("\n== Recipient scan/decrypt using viewing keys ==");
+  for (const key of ["owner", "userB", "userC", "userD"]) {
+    const viewer = users[key];
+    const discovered = await scanAndDecryptNotes({
+      provider,
+      poolAddress,
+      fromBlock: poolDeployBlock,
+      viewer,
+    });
+    console.log({
+      viewer: viewer.name,
+      discoveredNotes: discovered.length,
+    });
+  }
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
