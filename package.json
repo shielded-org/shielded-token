@@ -11,6 +11,7 @@
     "dev:web": "npm run dev --workspace @zkproject/web",
     "dev:relayer": "npm run dev --workspace @zkproject/relayer",
     "e2e:hardhat-local": "node scripts/hardhat-local-e2e.mjs",
+    "e2e:sepolia": "node scripts/sepolia-e2e.mjs",
     "lint:web": "npm run lint --workspace @zkproject/web",
     "build:web": "npm run build --workspace @zkproject/web",
     "check:sdk": "npm run check --workspace @zkproject/sdk",

@@ -17,6 +17,7 @@ npm run dev --workspace @zkproject/relayer
 - `RELAYER_PORT` (default `8787`)
 - `RELAYER_RPC_URL` RPC endpoint used by relayer wallet
 - `RELAYER_SIGNER_PRIVATE_KEY` private key used to submit txs
+- `RELAYER_SHIELDED_TRANSFER_GAS_LIMIT` (default `16000000`) — public RPCs such as Sepolia often reject txs above ~16.7M gas
 
 If RPC and signer are not configured, the relayer falls back to stub mode and returns synthetic tx hashes.
 

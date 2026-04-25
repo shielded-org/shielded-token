@@ -49,6 +49,7 @@ Shielding and unshielding remain **boundary actions** on a public chain (visible
 - `packages/contracts`: Foundry contracts (verifier, tree, monolithic `ShieldedToken`, Poseidon helpers)
 - `services/relayer`: HTTP relayer for submitting shielded transfers on-chain
 - `scripts/hardhat-local-e2e.mjs`: complete local E2E orchestration
+- `scripts/sepolia-e2e.mjs`: same flow against Sepolia (deploy or reuse addresses, optional transfers-only)
 - `apps/web`: frontend shell (not required for CLI E2E)
 
 ---
@@ -161,7 +162,7 @@ Run:
 npm run dev:relayer
 ```
 
-### 5) Run full E2E
+### 5) Run full E2E (local)
 
 ```bash
 npm run e2e:hardhat-local
@@ -177,6 +178,24 @@ This script does all of the following:
 - Generates and submits 3 shielded transfers through relayer
 - Waits for on-chain confirmations
 - Scans and decrypts recipient notes via viewing keys
+
+### 5b) Sepolia testnet E2E
+
+Fund the deployer account with Sepolia ETH. Point the relayer at the same RPC and chain (`services/relayer` `RELAYER_RPC_URL`, `RELAYER_SIGNER_PRIVATE_KEY` funded on Sepolia). Copy `.env.sepolia.example` to `.env.sepolia`, set `PRIVATE_KEY`, then:
+
+```bash
+node --env-file=.env.sepolia scripts/sepolia-e2e.mjs
+```
+
+(`npm run e2e:sepolia` runs the same script; export vars or use a shell wrapper if you do not use `--env-file`.)
+
+Required env: `TESTNET_RPC_URL`, `PRIVATE_KEY` (deployer, `0x` optional), and relayer reachable at `RELAYER_URL`.
+
+- **First run (deploy):** omit `SKIP_DEPLOY` / `TRANSFERS_ONLY`. Writes `scripts/sepolia-deployment.json` (gitignored) and `scripts/sepolia-e2e-state.json` after shields (before transfers).
+- **Reuse deployment, empty Merkle tree:** `SKIP_DEPLOY=1` with addresses in env or the deployment JSON; runs shields + transfers.
+- **Transfers only** (after a run that saved state post-shield, before transfers finished): `TRANSFERS_ONLY=1` plus the same deployment and `scripts/sepolia-e2e-state.json`. On success the state file is removed.
+
+Do not commit `.env` files or private keys. If a key was pasted into chat or committed, rotate it.
 
 ---
 

@@ -1,5 +1,36 @@
+/**
+ * Sepolia testnet E2E — same flow as hardhat-local-e2e.mjs:
+ * build circuit/contracts → deploy (optional) → shield 6 notes → 3 relayed transfers → scan/decrypt.
+ *
+ * Env (use a local file and Node 20+):  node --env-file=.env.sepolia scripts/sepolia-e2e.mjs
+ *
+ * Required:
+ *   TESTNET_RPC_URL   (e.g. https://ethereum-sepolia-rpc.publicnode.com)
+ *   PRIVATE_KEY       deployer + shield signer (0x-prefixed, funded with Sepolia ETH)
+ *
+ * Optional:
+ *   TESTNET_CHAIN_ID=11155111
+ *   TESTNET_NAME=sepolia
+ *   BLOCK_EXPLORER_BASE_URL=https://sepolia.etherscan.io
+ *   RELAYER_URL         (default http://127.0.0.1:8787) — relayer must use RELAYER_RPC_URL=TESTNET_RPC_URL
+ *   RELAYER_CONFIRM_TIMEOUT_MS, RELAYER_POLL_INTERVAL_MS
+ *
+ * Reuse deployment (no new Poseidon/verifier/tree/token txs) — tree must be empty or use transfers-only:
+ *   SKIP_DEPLOY=true
+ *   Addresses from SEPOLIA_POSEIDON, SEPOLIA_POSEIDON_HASHER, SEPOLIA_VERIFIER, SEPOLIA_MERKLE_TREE,
+ *   SEPOLIA_SHIELDED_TOKEN — or scripts/sepolia-deployment.json from a prior deploy.
+ *
+ * Transfers only (skip deploy + skip shield; uses Merkle snapshot after a shield phase):
+ *   TRANSFERS_ONLY=true
+ *   Requires scripts/sepolia-e2e-state.json (written after shields on a prior run, before transfers).
+ *
+ * TOKEN_DEPLOY_BLOCK — block when token was deployed (log scan); also stored in sepolia-deployment.json.
+ *
+ * After deploy, addresses are written to scripts/sepolia-deployment.json (gitignored).
+ */
+
 import {execFileSync} from "node:child_process";
-import {readFileSync, writeFileSync} from "node:fs";
+import {existsSync, readFileSync, unlinkSync, writeFileSync} from "node:fs";
 import {
   createCipheriv,
   createDecipheriv,
@@ -17,16 +48,23 @@ const __dirname = path.dirname(__filename);
 const root = path.resolve(__dirname, "..");
 const contractsDir = path.join(root, "packages", "contracts");
 const circuitsDir = path.join(root, "packages", "circuits");
+const deploymentJsonPath = path.join(__dirname, "sepolia-deployment.json");
+const shieldStateJsonPath = path.join(__dirname, "sepolia-e2e-state.json");
 
-const LOCAL_RPC_URL = process.env.LOCAL_RPC_URL || "http://127.0.0.1:8545";
+const TESTNET_RPC_URL = process.env.TESTNET_RPC_URL || "";
+const TESTNET_CHAIN_ID = Number(process.env.TESTNET_CHAIN_ID || 11155111);
+const TESTNET_NAME = process.env.TESTNET_NAME || "sepolia";
+const BLOCK_EXPLORER_BASE_URL = (process.env.BLOCK_EXPLORER_BASE_URL || "https://sepolia.etherscan.io").replace(
+  /\/$/,
+  ""
+);
+const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
 const RELAYER_URL = process.env.RELAYER_URL || "http://127.0.0.1:8787";
-const RELAYER_CONFIRM_TIMEOUT_MS = Number(process.env.RELAYER_CONFIRM_TIMEOUT_MS || 180_000);
-const RELAYER_POLL_INTERVAL_MS = Number(process.env.RELAYER_POLL_INTERVAL_MS || 2_000);
-const DEPLOYER_KEY =
-  process.env.LOCAL_PRIVATE_KEY ||
-  "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+const RELAYER_CONFIRM_TIMEOUT_MS = Number(process.env.RELAYER_CONFIRM_TIMEOUT_MS || 600_000);
+const RELAYER_POLL_INTERVAL_MS = Number(process.env.RELAYER_POLL_INTERVAL_MS || 3_000);
+const SKIP_DEPLOY = String(process.env.SKIP_DEPLOY || "").toLowerCase() === "true" || process.env.SKIP_DEPLOY === "1";
+const TRANSFERS_ONLY = String(process.env.TRANSFERS_ONLY || "").toLowerCase() === "true" || process.env.TRANSFERS_ONLY === "1";
 
-/// Monolithic ShieldedToken: ERC20 + embedded pool (STRK20-style coordinator).
 const SHIELDED_TOKEN_ABI = [
   "function shield(uint256 amount, bytes32 commitment, bytes encryptedNote) external",
   "function shieldedTransfer(bytes proof, bytes32[2] nullifiers, bytes32[2] newCommitments, bytes[2] encryptedNotes, bytes32 merkleRoot, bytes32 token, uint64 fee) external",
@@ -55,6 +93,16 @@ function loadForgeArtifact(relPath) {
 
 function run(cmd, args, cwd) {
   return execFileSync(cmd, args, {cwd, stdio: "inherit"});
+}
+
+function explorerTx(hash) {
+  if (!hash || !BLOCK_EXPLORER_BASE_URL) return hash;
+  return `${BLOCK_EXPLORER_BASE_URL}/tx/${hash}`;
+}
+
+function explorerAddr(addr) {
+  if (!addr || !BLOCK_EXPLORER_BASE_URL) return addr;
+  return `${BLOCK_EXPLORER_BASE_URL}/address/${addr}`;
 }
 
 async function relayShieldedTransfer(bundle) {
@@ -167,12 +215,7 @@ function decryptNoteECDH(encryptedNoteHex, recipientViewingPriv) {
   }
 }
 
-async function scanAndDecryptNotes({
-  provider,
-  tokenAddress,
-  fromBlock,
-  viewer,
-}) {
+async function scanAndDecryptNotes({provider, tokenAddress, fromBlock, viewer}) {
   const iface = new ethers.Interface(SHIELDED_TOKEN_ABI);
   const topic = iface.getEvent("NewCommitment").topicHash;
   const logs = await provider.getLogs({
@@ -417,6 +460,7 @@ async function executeTransferStep({
     nullifier1Used: nf1Used,
     relayerRequestId: relayerResult.requestId,
     txHash: confirmedStatus.txHash ?? relayerResult.txHash,
+    explorer: explorerTx(confirmedStatus.txHash ?? relayerResult.txHash),
     status: confirmedStatus.status,
     blockNumber: confirmedStatus.blockNumber,
   });
@@ -430,89 +474,237 @@ async function executeTransferStep({
   };
 }
 
+function readDeploymentFromEnv() {
+  const poseidon = process.env.SEPOLIA_POSEIDON;
+  const hasher = process.env.SEPOLIA_POSEIDON_HASHER;
+  const verifier = process.env.SEPOLIA_VERIFIER;
+  const tree = process.env.SEPOLIA_MERKLE_TREE;
+  const token = process.env.SEPOLIA_SHIELDED_TOKEN;
+  if (!poseidon || !hasher || !verifier || !tree || !token) {
+    return null;
+  }
+  return {poseidon, poseidonHasher: hasher, verifier, merkleTree: tree, shieldedToken: token};
+}
+
+function readDeploymentFromJson() {
+  if (!existsSync(deploymentJsonPath)) return null;
+  try {
+    const j = JSON.parse(readFileSync(deploymentJsonPath, "utf8"));
+    if (j.poseidon && j.poseidonHasher && j.verifier && j.merkleTree && j.shieldedToken) {
+      return {
+        poseidon: j.poseidon,
+        poseidonHasher: j.poseidonHasher,
+        verifier: j.verifier,
+        merkleTree: j.merkleTree,
+        shieldedToken: j.shieldedToken,
+        tokenDeployBlock: j.tokenDeployBlock ?? 0,
+      };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function writeShieldState(payload) {
+  const serializable = {
+    version: 1,
+    shieldedToken: payload.tokenAddr,
+    tokenField: payload.tokenField,
+    allLeaves: payload.allLeaves,
+    ownerNotes: payload.ownerNotes.map((n) => ({
+      index: n.index,
+      commitment: n.commitment,
+      amount: n.amount.toString(),
+      blinding: n.blinding.toString(),
+      ownerPk: n.ownerPk.toString(),
+    })),
+  };
+  writeFileSync(shieldStateJsonPath, `${JSON.stringify(serializable, null, 2)}\n`, "utf8");
+  console.log(`Wrote post-shield state: ${shieldStateJsonPath} (for TRANSFERS_ONLY=1)`);
+}
+
+function readShieldState() {
+  if (!existsSync(shieldStateJsonPath)) {
+    throw new Error(
+      `TRANSFERS_ONLY requires ${shieldStateJsonPath} from a prior run (saved after shields, before transfers)`
+    );
+  }
+  const j = JSON.parse(readFileSync(shieldStateJsonPath, "utf8"));
+  if (j.version !== 1 || !Array.isArray(j.allLeaves) || !Array.isArray(j.ownerNotes)) {
+    throw new Error("Invalid sepolia-e2e-state.json");
+  }
+  const ownerNotes = j.ownerNotes.map((n) => ({
+    index: n.index,
+    commitment: n.commitment,
+    amount: BigInt(n.amount),
+    blinding: BigInt(n.blinding),
+    ownerPk: BigInt(n.ownerPk),
+  }));
+  return {
+    tokenAddrExpected: j.shieldedToken,
+    tokenFieldExpected: j.tokenField,
+    allLeaves: [...j.allLeaves],
+    ownerNotes,
+  };
+}
+
 async function main() {
-  console.log("== Building contracts and circuit ==");
-  run("nargo", ["compile"], circuitsDir);
-  run("bb", ["write_vk", "-b", "target/shielded_transfer.json", "-o", "target/vk"], circuitsDir);
-  run("bb", ["contract", "-k", "target/vk", "-o", "target/contract.sol"], circuitsDir);
-  writeFileSync(
-    path.join(contractsDir, "src", "HonkVerifier.sol"),
-    readFileSync(path.join(circuitsDir, "target", "contract.sol"), "utf8")
-  );
-  run("forge", ["build"], contractsDir);
+  if (!TESTNET_RPC_URL) {
+    throw new Error("Set TESTNET_RPC_URL (e.g. https://ethereum-sepolia-rpc.publicnode.com)");
+  }
+  if (!PRIVATE_KEY) {
+    throw new Error("Set PRIVATE_KEY for funded Sepolia deployer/shield signer");
+  }
 
-  const provider = new ethers.JsonRpcProvider(LOCAL_RPC_URL);
-  const baseSigner = new ethers.Wallet(DEPLOYER_KEY, provider);
+  const pk = PRIVATE_KEY.startsWith("0x") ? PRIVATE_KEY : `0x${PRIVATE_KEY}`;
+  console.log(`== ${TESTNET_NAME} (chainId ${TESTNET_CHAIN_ID}) ==`);
+  console.log(`RPC: ${TESTNET_RPC_URL}`);
+
+  const provider = new ethers.JsonRpcProvider(TESTNET_RPC_URL, TESTNET_CHAIN_ID);
+  const net = await provider.getNetwork();
+  if (Number(net.chainId) !== TESTNET_CHAIN_ID) {
+    console.warn(`Warning: RPC chainId ${net.chainId} differs from TESTNET_CHAIN_ID ${TESTNET_CHAIN_ID}`);
+  }
+
+  const buildAndCompile = !TRANSFERS_ONLY;
+  if (buildAndCompile) {
+    console.log("== Building contracts and circuit ==");
+    run("nargo", ["compile"], circuitsDir);
+    run("bb", ["write_vk", "-b", "target/shielded_transfer.json", "-o", "target/vk"], circuitsDir);
+    run("bb", ["contract", "-k", "target/vk", "-o", "target/contract.sol"], circuitsDir);
+    writeFileSync(
+      path.join(contractsDir, "src", "HonkVerifier.sol"),
+      readFileSync(path.join(circuitsDir, "target", "contract.sol"), "utf8")
+    );
+    run("forge", ["build"], contractsDir);
+  } else {
+    console.log("== TRANSFERS_ONLY: compiling circuit only (no forge / verifier copy) ==");
+    run("nargo", ["compile"], circuitsDir);
+    run("bb", ["write_vk", "-b", "target/shielded_transfer.json", "-o", "target/vk"], circuitsDir);
+  }
+
+  const baseSigner = new ethers.Wallet(pk, provider);
   const signer = new ethers.NonceManager(baseSigner);
+  const deployerAddr = await signer.getAddress();
+  const bal = await provider.getBalance(deployerAddr);
+  console.log(`Deployer: ${deployerAddr}`);
+  console.log(`Balance: ${ethers.formatEther(bal)} ETH`);
+  if (bal === 0n) throw new Error("Deployer has zero ETH; fund the account on Sepolia");
 
-  console.log(`Using local chain: ${LOCAL_RPC_URL}`);
-  console.log(`Deployer: ${await signer.getAddress()}`);
+  let poseidonAddr;
+  let poseidon2HasherAddr;
+  let verifierAddr;
+  let treeAddr;
+  let tokenAddr;
+  let tokenDeployBlock = Number(process.env.TOKEN_DEPLOY_BLOCK || 0);
 
-  console.log("== Deploying local Poseidon2 ==");
-  const poseidonArtifact = loadForgeArtifact("Poseidon2.sol/Poseidon2.json");
-  const poseidonFactory = new ethers.ContractFactory(
-    poseidonArtifact.abi,
-    poseidonArtifact.bytecode.object,
-    signer
-  );
-  const poseidon = await poseidonFactory.deploy();
-  await poseidon.waitForDeployment();
-  console.log(`Poseidon2: ${await poseidon.getAddress()}`);
-  const poseidonRW = new ethers.Contract(await poseidon.getAddress(), POSEIDON_ABI, provider);
+  const fromJson = readDeploymentFromJson();
+  const fromEnv = readDeploymentFromEnv();
 
-  console.log("== Deploying Poseidon2YulHasher adapter ==");
-  const hasherAdapterArtifact = loadForgeArtifact("Poseidon2YulHasher.sol/Poseidon2YulHasher.json");
-  const hasherAdapterFactory = new ethers.ContractFactory(
-    hasherAdapterArtifact.abi,
-    hasherAdapterArtifact.bytecode.object,
-    signer
-  );
-  const hasherAdapter = await hasherAdapterFactory.deploy(await poseidon.getAddress());
-  await hasherAdapter.waitForDeployment();
-  const poseidon2HasherAddress = await hasherAdapter.getAddress();
-  const hasher = new ethers.Contract(poseidon2HasherAddress, HASHER_ABI, provider);
-  console.log(`Poseidon2Hasher: ${poseidon2HasherAddress}`);
+  if (SKIP_DEPLOY || TRANSFERS_ONLY) {
+    const dep = fromEnv || fromJson;
+    if (!dep) {
+      throw new Error(
+        "SKIP_DEPLOY or TRANSFERS_ONLY requires SEPOLIA_* env vars or scripts/sepolia-deployment.json from a prior deploy"
+      );
+    }
+    poseidonAddr = dep.poseidon;
+    poseidon2HasherAddr = dep.poseidonHasher;
+    verifierAddr = dep.verifier;
+    treeAddr = dep.merkleTree;
+    tokenAddr = dep.shieldedToken;
+    if (dep.tokenDeployBlock != null) tokenDeployBlock = Number(dep.tokenDeployBlock);
+    console.log("== Using existing deployment ==");
+    console.log({
+      poseidon: explorerAddr(poseidonAddr),
+      poseidonHasher: explorerAddr(poseidon2HasherAddr),
+      verifier: explorerAddr(verifierAddr),
+      merkleTree: explorerAddr(treeAddr),
+      shieldedToken: explorerAddr(tokenAddr),
+      tokenDeployBlock,
+    });
+  } else {
+    console.log("== Deploying to Sepolia ==");
+    const poseidonArtifact = loadForgeArtifact("Poseidon2.sol/Poseidon2.json");
+    const poseidonFactory = new ethers.ContractFactory(
+      poseidonArtifact.abi,
+      poseidonArtifact.bytecode.object,
+      signer
+    );
+    const poseidon = await poseidonFactory.deploy();
+    await poseidon.waitForDeployment();
+    poseidonAddr = await poseidon.getAddress();
+    console.log(`Poseidon2: ${explorerAddr(poseidonAddr)}`);
 
-  console.log("== Deploying verifier ==");
-  const verifierArtifact = loadForgeArtifact("HonkVerifier.sol/UltraVerifier.json");
-  const verifierFactory = new ethers.ContractFactory(
-    verifierArtifact.abi,
-    verifierArtifact.bytecode.object,
-    signer
-  );
-  const verifier = await verifierFactory.deploy();
-  await verifier.waitForDeployment();
-  console.log(`HonkVerifier: ${await verifier.getAddress()}`);
+    const hasherAdapterArtifact = loadForgeArtifact("Poseidon2YulHasher.sol/Poseidon2YulHasher.json");
+    const hasherAdapterFactory = new ethers.ContractFactory(
+      hasherAdapterArtifact.abi,
+      hasherAdapterArtifact.bytecode.object,
+      signer
+    );
+    const hasherAdapter = await hasherAdapterFactory.deploy(poseidonAddr);
+    await hasherAdapter.waitForDeployment();
+    poseidon2HasherAddr = await hasherAdapter.getAddress();
+    console.log(`Poseidon2Hasher: ${explorerAddr(poseidon2HasherAddr)}`);
 
-  console.log("== Deploying tree ==");
-  const treeArtifact = loadForgeArtifact("IncrementalMerkleTree.sol/IncrementalMerkleTree.json");
-  const treeFactory = new ethers.ContractFactory(treeArtifact.abi, treeArtifact.bytecode.object, signer);
-  const tree = await treeFactory.deploy(poseidon2HasherAddress);
-  await tree.waitForDeployment();
-  console.log(`IncrementalMerkleTree: ${await tree.getAddress()}`);
+    const verifierArtifact = loadForgeArtifact("HonkVerifier.sol/UltraVerifier.json");
+    const verifierFactory = new ethers.ContractFactory(
+      verifierArtifact.abi,
+      verifierArtifact.bytecode.object,
+      signer
+    );
+    const verifier = await verifierFactory.deploy();
+    await verifier.waitForDeployment();
+    verifierAddr = await verifier.getAddress();
+    console.log(`HonkVerifier: ${explorerAddr(verifierAddr)}`);
 
-  console.log("== Deploying ShieldedToken (monolith: ERC20 + embedded pool) ==");
-  const tokenArtifact = loadForgeArtifact("ShieldedToken.sol/ShieldedToken.json");
-  const tokenFactory = new ethers.ContractFactory(tokenArtifact.abi, tokenArtifact.bytecode.object, signer);
-  const initialSupply = ethers.parseEther("1000");
-  const token = await tokenFactory.deploy(
-    "Shielded Token",
-    "SHLD",
-    await verifier.getAddress(),
-    await tree.getAddress(),
-    await signer.getAddress(),
-    initialSupply
-  );
-  await token.waitForDeployment();
-  const tokenAddress = await token.getAddress();
-  const tokenDeployReceipt = await token.deploymentTransaction().wait();
-  const tokenDeployBlock = tokenDeployReceipt?.blockNumber ?? 0;
-  console.log(`ShieldedToken: ${tokenAddress}`);
+    const treeArtifact = loadForgeArtifact("IncrementalMerkleTree.sol/IncrementalMerkleTree.json");
+    const treeFactory = new ethers.ContractFactory(treeArtifact.abi, treeArtifact.bytecode.object, signer);
+    const tree = await treeFactory.deploy(poseidon2HasherAddr);
+    await tree.waitForDeployment();
+    treeAddr = await tree.getAddress();
+    console.log(`IncrementalMerkleTree: ${explorerAddr(treeAddr)}`);
 
-  const tokenRW = new ethers.Contract(tokenAddress, SHIELDED_TOKEN_ABI, signer);
-  const treeRW = new ethers.Contract(await tree.getAddress(), MERKLE_ABI, signer);
+    const tokenArtifact = loadForgeArtifact("ShieldedToken.sol/ShieldedToken.json");
+    const tokenFactory = new ethers.ContractFactory(tokenArtifact.abi, tokenArtifact.bytecode.object, signer);
+    const initialSupply = ethers.parseEther("1000");
+    const token = await tokenFactory.deploy(
+      "Shielded Token",
+      "SHLD",
+      verifierAddr,
+      treeAddr,
+      deployerAddr,
+      initialSupply
+    );
+    await token.waitForDeployment();
+    tokenAddr = await token.getAddress();
+    const tokenDeployReceipt = await token.deploymentTransaction().wait();
+    tokenDeployBlock = tokenDeployReceipt?.blockNumber ?? 0;
+    console.log(`ShieldedToken: ${explorerAddr(tokenAddr)}`);
 
+    const record = {
+      testnet: TESTNET_NAME,
+      chainId: TESTNET_CHAIN_ID,
+      rpcUrl: TESTNET_RPC_URL,
+      blockExplorer: BLOCK_EXPLORER_BASE_URL,
+      poseidon: poseidonAddr,
+      poseidonHasher: poseidon2HasherAddr,
+      verifier: verifierAddr,
+      merkleTree: treeAddr,
+      shieldedToken: tokenAddr,
+      tokenDeployBlock,
+      deployedAt: new Date().toISOString(),
+    };
+    writeFileSync(deploymentJsonPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+    console.log(`Wrote ${deploymentJsonPath}`);
+  }
+
+  const poseidonRW = new ethers.Contract(poseidonAddr, POSEIDON_ABI, provider);
+  const treeRW = new ethers.Contract(treeAddr, MERKLE_ABI, signer);
+  const tokenRW = new ethers.Contract(tokenAddr, SHIELDED_TOKEN_ABI, signer);
   const tokenField = await tokenRW.tokenField();
+
   const users = {
     owner: {name: "Owner", spendingKey: 123456789n, viewingPriv: 11111111n},
     userB: {name: "UserB", spendingKey: 777777n, viewingPriv: 22222222n},
@@ -525,52 +717,69 @@ async function main() {
   }
   const fee = 0n;
 
-  console.log("== Shielding six owner notes (burn public balance, insert commitments) ==");
-  const initialNotesSpec = [
-    {amount: 20n, blinding: 1111n},
-    {amount: 20n, blinding: 2222n},
-    {amount: 20n, blinding: 3333n},
-    {amount: 20n, blinding: 4444n},
-    {amount: 20n, blinding: 5555n},
-    {amount: 20n, blinding: 6666n},
-  ];
-  const allLeaves = [];
-  const ownerNotes = [];
-  for (let i = 0; i < initialNotesSpec.length; i += 1) {
-    const spec = initialNotesSpec[i];
-    const commitment = await noteCommitment(poseidonRW, users.owner.ownerPk, tokenField, spec.amount, spec.blinding);
-    const encryptedDepositNote = encryptNoteECDH(
-      {token: tokenField, amount: spec.amount.toString(), blinding: toHex32(spec.blinding), commitment},
-      users.owner.viewingPub
-    );
-    await (await tokenRW.shield(spec.amount, commitment, encryptedDepositNote)).wait();
-    const index = allLeaves.length;
-    allLeaves.push(commitment);
-    ownerNotes.push({index, commitment, amount: spec.amount, blinding: spec.blinding, ownerPk: users.owner.ownerPk});
-    console.log(`Shielded note #${i + 1}: inserted`);
+  const onChainNextIndex = await treeRW.getNextIndex();
+  let allLeaves;
+  let ownerNotes;
+
+  if (TRANSFERS_ONLY) {
+    const st = readShieldState();
+    if (st.tokenAddrExpected.toLowerCase() !== tokenAddr.toLowerCase()) {
+      throw new Error(
+        `sepolia-e2e-state.json token ${st.tokenAddrExpected} != current ${tokenAddr}`
+      );
+    }
+    if (st.tokenFieldExpected.toLowerCase() !== tokenField.toLowerCase()) {
+      throw new Error("sepolia-e2e-state.json tokenField mismatch vs on-chain tokenField()");
+    }
+    if (BigInt(st.allLeaves.length) !== onChainNextIndex) {
+      throw new Error(
+        `State vs chain desync: state has ${st.allLeaves.length} leaves, tree getNextIndex()=${onChainNextIndex}`
+      );
+    }
+    allLeaves = st.allLeaves;
+    ownerNotes = st.ownerNotes;
+    console.log("== TRANSFERS_ONLY: loaded post-shield Merkle snapshot ==");
+    console.log({leaves: allLeaves.length, ownerNotesQueued: ownerNotes.length});
+  } else {
+    if (onChainNextIndex > 0n) {
+      throw new Error(
+        `Merkle tree already has ${onChainNextIndex} leaves. This script only supports an empty tree for the scripted shield phase. Use TRANSFERS_ONLY=1 with ${shieldStateJsonPath} after a run that saved state post-shield, or deploy a new token/tree.`
+      );
+    }
+    console.log("== Shielding six owner notes (on-chain txs from deployer) ==");
+    const initialNotesSpec = [
+      {amount: 20n, blinding: 1111n},
+      {amount: 20n, blinding: 2222n},
+      {amount: 20n, blinding: 3333n},
+      {amount: 20n, blinding: 4444n},
+      {amount: 20n, blinding: 5555n},
+      {amount: 20n, blinding: 6666n},
+    ];
+    allLeaves = [];
+    ownerNotes = [];
+    for (let i = 0; i < initialNotesSpec.length; i += 1) {
+      const spec = initialNotesSpec[i];
+      const commitment = await noteCommitment(poseidonRW, users.owner.ownerPk, tokenField, spec.amount, spec.blinding);
+      const encryptedDepositNote = encryptNoteECDH(
+        {token: tokenField, amount: spec.amount.toString(), blinding: toHex32(spec.blinding), commitment},
+        users.owner.viewingPub
+      );
+      const tx = await tokenRW.shield(spec.amount, commitment, encryptedDepositNote);
+      const receipt = await tx.wait();
+      console.log(`Shielded note #${i + 1}: ${explorerTx(receipt.hash)}`);
+      const index = allLeaves.length;
+      allLeaves.push(commitment);
+      ownerNotes.push({index, commitment, amount: spec.amount, blinding: spec.blinding, ownerPk: users.owner.ownerPk});
+    }
+    writeShieldState({tokenAddr, tokenField, allLeaves, ownerNotes});
   }
 
   run("bb", ["write_vk", "-b", "target/shielded_transfer.json", "-o", "target/vk"], circuitsDir);
 
   const transferPlan = [
-    {
-      name: "Transfer 1 (Owner -> UserB)",
-      recipient: users.userB,
-      recipientAmount: 35n,
-      changeAmount: 5n,
-    },
-    {
-      name: "Transfer 2 (Owner -> UserC)",
-      recipient: users.userC,
-      recipientAmount: 33n,
-      changeAmount: 7n,
-    },
-    {
-      name: "Transfer 3 (Owner -> UserD)",
-      recipient: users.userD,
-      recipientAmount: 34n,
-      changeAmount: 6n,
-    },
+    {name: "Transfer 1 (Owner -> UserB)", recipient: users.userB, recipientAmount: 35n, changeAmount: 5n},
+    {name: "Transfer 2 (Owner -> UserC)", recipient: users.userC, recipientAmount: 33n, changeAmount: 7n},
+    {name: "Transfer 3 (Owner -> UserD)", recipient: users.userD, recipientAmount: 34n, changeAmount: 6n},
   ];
 
   const results = [];
@@ -587,7 +796,7 @@ async function main() {
       poseidonRW,
       treeRW,
       tokenRW,
-      tokenAddress,
+      tokenAddress: tokenAddr,
       tokenField,
       spendingKey: users.owner.spendingKey,
       inNotes: [in0, in1],
@@ -623,21 +832,32 @@ async function main() {
     finalOwnerUnspentNotes: ownerNotes.length,
     finalRoot: await treeRW.getLastRoot(),
     tokenField,
+    shieldedToken: explorerAddr(tokenAddr),
   });
 
+  const scanFrom = tokenDeployBlock > 0 ? tokenDeployBlock : 0;
   console.log("\n== Recipient scan/decrypt using viewing keys ==");
   for (const key of ["owner", "userB", "userC", "userD"]) {
     const viewer = users[key];
     const discovered = await scanAndDecryptNotes({
       provider,
-      tokenAddress,
-      fromBlock: tokenDeployBlock,
+      tokenAddress: tokenAddr,
+      fromBlock: scanFrom,
       viewer,
     });
     console.log({
       viewer: viewer.name,
       discoveredNotes: discovered.length,
     });
+  }
+
+  if (existsSync(shieldStateJsonPath)) {
+    try {
+      unlinkSync(shieldStateJsonPath);
+      console.log(`Removed ${shieldStateJsonPath} after successful transfers`);
+    } catch {
+      /* ignore */
+    }
   }
 }
 

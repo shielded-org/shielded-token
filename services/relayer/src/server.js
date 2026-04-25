@@ -9,6 +9,8 @@ const relayerRpcUrl = process.env.RELAYER_RPC_URL || process.env.LOCAL_RPC_URL |
 const relayerPrivateKey = process.env.RELAYER_SIGNER_PRIVATE_KEY || process.env.LOCAL_PRIVATE_KEY || "";
 const confirmTimeoutMs = Number(process.env.RELAYER_CONFIRM_TIMEOUT_MS || 180_000);
 const confirmPollMs = Number(process.env.RELAYER_CONFIRM_POLL_MS || 2_000);
+/** Sepolia / many RPCs cap block gas target; raw tx gasLimit must stay under ~16.7M. */
+const defaultShieldedTransferGasLimit = Number(process.env.RELAYER_SHIELDED_TRANSFER_GAS_LIMIT || 16_000_000);
 
 const requests = new Map();
 const canSubmitOnchain = Boolean(relayerRpcUrl && relayerPrivateKey);
@@ -65,7 +67,7 @@ async function submitShieldedTransferOnchain(body) {
     body.merkleRoot,
     body.token,
     Number(body.fee ?? 0),
-    {gasLimit: body.gasLimit ?? 30_000_000}
+    {gasLimit: body.gasLimit ?? defaultShieldedTransferGasLimit}
   );
   return tx.hash;
 }
