@@ -29,6 +29,8 @@ If RPC and signer are not configured, the relayer falls back to stub mode and re
 - `proof` (hex bytes)
 - `nullifiers` (`bytes32[2]`)
 - `newCommitments` (`bytes32[2]`)
+- `channels` (`bytes32[2]`)
+- `subchannels` (`bytes32[2]`)
 - `merkleRoot` (`bytes32`)
 - `token` (`bytes32` token field)
 - `fee` (`uint64`)
