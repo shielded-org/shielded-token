@@ -31,7 +31,7 @@ contract ShieldedToken {
         bytes32 commitment1
     );
     event Unshield(bytes32 indexed nullifier, address indexed recipient, uint256 amount);
-    event NewCommitment(bytes encryptedNote);
+    event RoutedCommitment(bytes32 indexed channel, bytes32 indexed subchannel, bytes encryptedNote);
 
     bytes32 private constant REDACTED = keccak256("REDACTED");
 
@@ -85,22 +85,30 @@ contract ShieldedToken {
     }
 
     /// @notice Move public ERC20 balance into the embedded shielded pool (burn + commitment insert).
-    function shield(uint256 amount, bytes32 commitment, bytes calldata encryptedNote) external {
+    function shieldRouted(
+        uint256 amount,
+        bytes32 commitment,
+        bytes calldata encryptedNote,
+        bytes32 channel,
+        bytes32 subchannel
+    ) external {
         if (amount == 0) revert InvalidAmount();
         if (commitment == bytes32(0)) revert InvalidCommitment();
         _burnWithoutEvent(msg.sender, amount);
         merkleTree.insert(commitment);
         if (encryptedNote.length > 0) {
-            emit NewCommitment(encryptedNote);
+            emit RoutedCommitment(channel, subchannel, encryptedNote);
         }
         emit Shield(address(0), REDACTED, REDACTED, 0);
     }
 
-    function shieldedTransfer(
+    function shieldedTransferRouted(
         bytes calldata proof,
         bytes32[2] calldata nullifiers,
         bytes32[2] calldata newCommitments,
         bytes[2] calldata encryptedNotes,
+        bytes32[2] calldata channels,
+        bytes32[2] calldata subchannels,
         bytes32 merkleRoot,
         bytes32 token,
         uint64 fee
@@ -128,8 +136,8 @@ contract ShieldedToken {
 
         merkleTree.insert(newCommitments[0]);
         merkleTree.insert(newCommitments[1]);
-        emit NewCommitment(encryptedNotes[0]);
-        emit NewCommitment(encryptedNotes[1]);
+        emit RoutedCommitment(channels[0], subchannels[0], encryptedNotes[0]);
+        emit RoutedCommitment(channels[1], subchannels[1], encryptedNotes[1]);
         emit ShieldedTransfer(REDACTED, REDACTED, REDACTED, REDACTED);
     }
 
