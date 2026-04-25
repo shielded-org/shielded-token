@@ -16,7 +16,7 @@ const requests = new Map();
 const canSubmitOnchain = Boolean(relayerRpcUrl && relayerPrivateKey);
 
 const SHIELDED_TRANSFER_ABI = [
-  "function shieldedTransfer(bytes proof, bytes32[2] nullifiers, bytes32[2] newCommitments, bytes[2] encryptedNotes, bytes32 merkleRoot, bytes32 token, uint64 fee) external",
+  "function shieldedTransferRouted(bytes proof, bytes32[2] nullifiers, bytes32[2] newCommitments, bytes[2] encryptedNotes, bytes32[2] channels, bytes32[2] subchannels, bytes32 merkleRoot, bytes32 token, uint64 fee) external",
 ];
 
 let relayerSigner = null;
@@ -54,16 +54,29 @@ function validatePayload(body) {
   if (typeof body.token !== "string" || !ethers.isHexString(body.token, 32)) {
     return "Invalid token field";
   }
+  if (!Array.isArray(body.channels) || !Array.isArray(body.subchannels)) {
+    return "channels/subchannels arrays are required";
+  }
+  if (body.channels.length !== 2 || body.subchannels.length !== 2) {
+    return "Expected 2 channels and 2 subchannels";
+  }
+  for (const item of [...body.channels, ...body.subchannels]) {
+    if (typeof item !== "string" || !ethers.isHexString(item, 32)) {
+      return "channels/subchannels entries must be bytes32 hex strings";
+    }
+  }
   return null;
 }
 
 async function submitShieldedTransferOnchain(body) {
   const token = new ethers.Contract(body.shieldedToken, SHIELDED_TRANSFER_ABI, relayerSigner);
-  const tx = await token.shieldedTransfer(
+  const tx = await token.shieldedTransferRouted(
     body.proof,
     body.nullifiers,
     body.newCommitments,
     body.encryptedNotes,
+    body.channels,
+    body.subchannels,
     body.merkleRoot,
     body.token,
     Number(body.fee ?? 0),
