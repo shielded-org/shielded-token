@@ -59,6 +59,11 @@ const BLOCK_EXPLORER_BASE_URL = (process.env.BLOCK_EXPLORER_BASE_URL || "https:/
   ""
 );
 const PRIVATE_KEY = process.env.PRIVATE_KEY || "";
+const ETHERSCAN_API_KEY = process.env.ETHERSCAN_API_KEY || "";
+const VERIFY_CONTRACTS =
+  String(process.env.VERIFY_CONTRACTS || "").toLowerCase() === "true" ||
+  process.env.VERIFY_CONTRACTS === "1" ||
+  (process.env.VERIFY_CONTRACTS == null && ETHERSCAN_API_KEY.length > 0);
 const RELAYER_URL = process.env.RELAYER_URL || "http://127.0.0.1:8787";
 const RELAYER_CONFIRM_TIMEOUT_MS = Number(process.env.RELAYER_CONFIRM_TIMEOUT_MS || 600_000);
 const RELAYER_POLL_INTERVAL_MS = Number(process.env.RELAYER_POLL_INTERVAL_MS || 3_000);
@@ -66,11 +71,11 @@ const SKIP_DEPLOY = String(process.env.SKIP_DEPLOY || "").toLowerCase() === "tru
 const TRANSFERS_ONLY = String(process.env.TRANSFERS_ONLY || "").toLowerCase() === "true" || process.env.TRANSFERS_ONLY === "1";
 
 const SHIELDED_TOKEN_ABI = [
-  "function shield(uint256 amount, bytes32 commitment, bytes encryptedNote) external",
-  "function shieldedTransfer(bytes proof, bytes32[2] nullifiers, bytes32[2] newCommitments, bytes[2] encryptedNotes, bytes32 merkleRoot, bytes32 token, uint64 fee) external",
+  "function shieldRouted(uint256 amount, bytes32 commitment, bytes encryptedNote, bytes32 channel, bytes32 subchannel) external",
+  "function shieldedTransferRouted(bytes proof, bytes32[2] nullifiers, bytes32[2] newCommitments, bytes[2] encryptedNotes, bytes32[2] channels, bytes32[2] subchannels, bytes32 merkleRoot, bytes32 token, uint64 fee) external",
   "function tokenField() external view returns (bytes32)",
   "function nullifierSet(bytes32) external view returns (bool)",
-  "event NewCommitment(bytes encryptedNote)",
+  "event RoutedCommitment(bytes32 indexed channel, bytes32 indexed subchannel, bytes encryptedNote)",
 ];
 
 const MERKLE_ABI = [
@@ -93,6 +98,27 @@ function loadForgeArtifact(relPath) {
 
 function run(cmd, args, cwd) {
   return execFileSync(cmd, args, {cwd, stdio: "inherit"});
+}
+
+function encodeConstructorArgs(types, values) {
+  return ethers.AbiCoder.defaultAbiCoder().encode(types, values);
+}
+
+function verifyContractOnEtherscan({address, contractId, constructorArgs}) {
+  const args = [
+    "verify-contract",
+    "--chain-id",
+    String(TESTNET_CHAIN_ID),
+    "--etherscan-api-key",
+    ETHERSCAN_API_KEY,
+    "--watch",
+    address,
+    contractId,
+  ];
+  if (constructorArgs) {
+    args.push("--constructor-args", constructorArgs);
+  }
+  run("forge", args, contractsDir);
 }
 
 function explorerTx(hash) {
@@ -166,6 +192,12 @@ function viewingPrivToPub(viewingPriv) {
   return bytesToHex(ecdh.getPublicKey(undefined, "compressed"));
 }
 
+function routeForRecipient(viewingPubHex, subchannelId) {
+  const channel = ethers.keccak256(viewingPubHex);
+  const subchannel = ethers.solidityPackedKeccak256(["bytes32", "uint64"], [channel, BigInt(subchannelId)]);
+  return {channel, subchannel};
+}
+
 function encryptNoteECDH(note, recipientViewingPubHex) {
   const eph = createECDH("secp256k1");
   eph.generateKeys();
@@ -215,15 +247,21 @@ function decryptNoteECDH(encryptedNoteHex, recipientViewingPriv) {
   }
 }
 
-async function scanAndDecryptNotes({provider, tokenAddress, fromBlock, viewer}) {
+async function scanAndDecryptNotes({provider, tokenAddress, fromBlock, viewer, subchannels = [0, 1, 2, 3]}) {
   const iface = new ethers.Interface(SHIELDED_TOKEN_ABI);
-  const topic = iface.getEvent("NewCommitment").topicHash;
-  const logs = await provider.getLogs({
-    address: tokenAddress,
-    fromBlock,
-    toBlock: "latest",
-    topics: [topic],
-  });
+  const topic = iface.getEvent("RoutedCommitment").topicHash;
+  const channel = ethers.keccak256(viewer.viewingPub);
+  const logs = [];
+  for (const subIdx of subchannels) {
+    const route = routeForRecipient(viewer.viewingPub, subIdx);
+    const scoped = await provider.getLogs({
+      address: tokenAddress,
+      fromBlock,
+      toBlock: "latest",
+      topics: [topic, channel, route.subchannel],
+    });
+    logs.push(...scoped);
+  }
   const discovered = [];
   for (const log of logs) {
     const parsed = iface.parseLog(log);
@@ -239,6 +277,37 @@ async function scanAndDecryptNotes({provider, tokenAddress, fromBlock, viewer}) 
     }
   }
   return discovered;
+}
+
+async function summarizeViewerBalance({viewer, discovered, poseidonRW, tokenRW}) {
+  let discoveredAmount = 0n;
+  let spentAmount = 0n;
+  let spendableAmount = 0n;
+  let spentNotes = 0;
+  let spendableNotes = 0;
+
+  for (const item of discovered) {
+    const noteAmount = BigInt(item.note.amount);
+    discoveredAmount += noteAmount;
+    const nf = await nullifier(poseidonRW, viewer.spendingKey, item.note.commitment);
+    const isSpent = await tokenRW.nullifierSet(nf);
+    if (isSpent) {
+      spentNotes += 1;
+      spentAmount += noteAmount;
+    } else {
+      spendableNotes += 1;
+      spendableAmount += noteAmount;
+    }
+  }
+
+  return {
+    discoveredNotes: discovered.length,
+    discoveredAmount: discoveredAmount.toString(),
+    spendableNotes,
+    spendableAmount: spendableAmount.toString(),
+    spentNotes,
+    spentAmount: spentAmount.toString(),
+  };
 }
 
 async function poseidonHash2(poseidon, a, b) {
@@ -367,6 +436,8 @@ async function executeTransferStep({
   changePk,
   changeAmount,
   outBlindings,
+  routedChannels,
+  routedSubchannels,
   fee,
 }) {
   if (inNotes.length !== 2) throw new Error(`${stepName}: expected exactly two input notes`);
@@ -444,6 +515,8 @@ async function executeTransferStep({
     nullifiers: [nullifier0, nullifier1],
     newCommitments: [outCommitment0, outCommitment1],
     encryptedNotes: [encryptedNote0, encryptedNote1],
+    channels: routedChannels,
+    subchannels: routedSubchannels,
     merkleRoot: rootOnChain,
     token: tokenField,
     fee: Number(fee),
@@ -507,18 +580,22 @@ function readDeploymentFromJson() {
 }
 
 function writeShieldState(payload) {
-  const serializable = {
-    version: 1,
-    shieldedToken: payload.tokenAddr,
-    tokenField: payload.tokenField,
-    allLeaves: payload.allLeaves,
-    ownerNotes: payload.ownerNotes.map((n) => ({
+  const notesByOwnerPk = {};
+  for (const [ownerPkKey, notes] of payload.notesByOwnerPk.entries()) {
+    notesByOwnerPk[ownerPkKey] = notes.map((n) => ({
       index: n.index,
       commitment: n.commitment,
       amount: n.amount.toString(),
       blinding: n.blinding.toString(),
       ownerPk: n.ownerPk.toString(),
-    })),
+    }));
+  }
+  const serializable = {
+    version: 1,
+    shieldedToken: payload.tokenAddr,
+    tokenField: payload.tokenField,
+    allLeaves: payload.allLeaves,
+    notesByOwnerPk,
   };
   writeFileSync(shieldStateJsonPath, `${JSON.stringify(serializable, null, 2)}\n`, "utf8");
   console.log(`Wrote post-shield state: ${shieldStateJsonPath} (for TRANSFERS_ONLY=1)`);
@@ -531,21 +608,29 @@ function readShieldState() {
     );
   }
   const j = JSON.parse(readFileSync(shieldStateJsonPath, "utf8"));
-  if (j.version !== 1 || !Array.isArray(j.allLeaves) || !Array.isArray(j.ownerNotes)) {
-    throw new Error("Invalid sepolia-e2e-state.json");
+  if (j.version !== 1 || !Array.isArray(j.allLeaves)) {
+    if (!j.notesByOwnerPk || typeof j.notesByOwnerPk !== "object") {
+      throw new Error("Invalid sepolia-e2e-state.json");
+    }
   }
-  const ownerNotes = j.ownerNotes.map((n) => ({
-    index: n.index,
-    commitment: n.commitment,
-    amount: BigInt(n.amount),
-    blinding: BigInt(n.blinding),
-    ownerPk: BigInt(n.ownerPk),
-  }));
+  const notesByOwnerPk = new Map();
+  if (j.notesByOwnerPk && typeof j.notesByOwnerPk === "object") {
+    for (const [ownerPkKey, notes] of Object.entries(j.notesByOwnerPk)) {
+      const parsed = notes.map((n) => ({
+        index: n.index,
+        commitment: n.commitment,
+        amount: BigInt(n.amount),
+        blinding: BigInt(n.blinding),
+        ownerPk: BigInt(n.ownerPk),
+      }));
+      notesByOwnerPk.set(ownerPkKey, parsed);
+    }
+  }
   return {
     tokenAddrExpected: j.shieldedToken,
     tokenFieldExpected: j.tokenField,
     allLeaves: [...j.allLeaves],
-    ownerNotes,
+    notesByOwnerPk,
   };
 }
 
@@ -698,6 +783,44 @@ async function main() {
     };
     writeFileSync(deploymentJsonPath, `${JSON.stringify(record, null, 2)}\n`, "utf8");
     console.log(`Wrote ${deploymentJsonPath}`);
+
+    if (VERIFY_CONTRACTS) {
+      if (!ETHERSCAN_API_KEY) {
+        console.warn("VERIFY_CONTRACTS enabled but ETHERSCAN_API_KEY is empty; skipping verification.");
+      } else {
+        console.log("== Verifying contracts on Etherscan ==");
+        try {
+          verifyContractOnEtherscan({
+            address: poseidonAddr,
+            contractId: "src/vendor/poseidon2-evm/Poseidon2.sol:Poseidon2",
+          });
+          verifyContractOnEtherscan({
+            address: poseidon2HasherAddr,
+            contractId: "src/Poseidon2YulHasher.sol:Poseidon2YulHasher",
+            constructorArgs: encodeConstructorArgs(["address"], [poseidonAddr]),
+          });
+          verifyContractOnEtherscan({
+            address: verifierAddr,
+            contractId: "src/HonkVerifier.sol:UltraVerifier",
+          });
+          verifyContractOnEtherscan({
+            address: treeAddr,
+            contractId: "src/IncrementalMerkleTree.sol:IncrementalMerkleTree",
+            constructorArgs: encodeConstructorArgs(["address"], [poseidon2HasherAddr]),
+          });
+          verifyContractOnEtherscan({
+            address: tokenAddr,
+            contractId: "src/ShieldedToken.sol:ShieldedToken",
+            constructorArgs: encodeConstructorArgs(
+              ["string", "string", "address", "address", "address", "uint256"],
+              ["Shielded Token", "SHLD", verifierAddr, treeAddr, deployerAddr, initialSupply]
+            ),
+          });
+        } catch (err) {
+          console.warn(`Contract verification failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
   }
 
   const poseidonRW = new ethers.Contract(poseidonAddr, POSEIDON_ABI, provider);
@@ -710,16 +833,36 @@ async function main() {
     userB: {name: "UserB", spendingKey: 777777n, viewingPriv: 22222222n},
     userC: {name: "UserC", spendingKey: 888888n, viewingPriv: 33333333n},
     userD: {name: "UserD", spendingKey: 999999n, viewingPriv: 44444444n},
+    userG: {name: "UserG", spendingKey: 555555n, viewingPriv: 66666666n},
+    userH: {name: "UserH", spendingKey: 666666n, viewingPriv: 77777777n},
+    userK: {name: "UserK", spendingKey: 444444n, viewingPriv: 88888888n},
   };
   for (const user of Object.values(users)) {
     user.ownerPk = parseHexToBigInt(await poseidonHash2(poseidonRW, user.spendingKey, 1n));
     user.viewingPub = viewingPrivToPub(user.viewingPriv);
+    user.routeCursor = 0;
   }
   const fee = 0n;
 
   const onChainNextIndex = await treeRW.getNextIndex();
+  const ownerPkKey = (ownerPk) => toHex32(ownerPk).toLowerCase();
   let allLeaves;
-  let ownerNotes;
+  let notesByOwnerPk;
+  const pushNote = (note) => {
+    const key = ownerPkKey(note.ownerPk);
+    const existing = notesByOwnerPk.get(key) || [];
+    existing.push(note);
+    notesByOwnerPk.set(key, existing);
+  };
+  const popTwoNotes = (ownerPk) => {
+    const key = ownerPkKey(ownerPk);
+    const existing = notesByOwnerPk.get(key) || [];
+    if (existing.length < 2) throw new Error(`Not enough notes for ${key}`);
+    const first = existing.shift();
+    const second = existing.shift();
+    notesByOwnerPk.set(key, existing);
+    return [first, second];
+  };
 
   if (TRANSFERS_ONLY) {
     const st = readShieldState();
@@ -737,9 +880,9 @@ async function main() {
       );
     }
     allLeaves = st.allLeaves;
-    ownerNotes = st.ownerNotes;
+    notesByOwnerPk = st.notesByOwnerPk;
     console.log("== TRANSFERS_ONLY: loaded post-shield Merkle snapshot ==");
-    console.log({leaves: allLeaves.length, ownerNotesQueued: ownerNotes.length});
+    console.log({leaves: allLeaves.length});
   } else {
     if (onChainNextIndex > 0n) {
       throw new Error(
@@ -756,7 +899,7 @@ async function main() {
       {amount: 20n, blinding: 6666n},
     ];
     allLeaves = [];
-    ownerNotes = [];
+    notesByOwnerPk = new Map();
     for (let i = 0; i < initialNotesSpec.length; i += 1) {
       const spec = initialNotesSpec[i];
       const commitment = await noteCommitment(poseidonRW, users.owner.ownerPk, tokenField, spec.amount, spec.blinding);
@@ -764,33 +907,34 @@ async function main() {
         {token: tokenField, amount: spec.amount.toString(), blinding: toHex32(spec.blinding), commitment},
         users.owner.viewingPub
       );
-      const tx = await tokenRW.shield(spec.amount, commitment, encryptedDepositNote);
+      const route = routeForRecipient(users.owner.viewingPub, users.owner.routeCursor++);
+      const tx = await tokenRW.shieldRouted(spec.amount, commitment, encryptedDepositNote, route.channel, route.subchannel);
       const receipt = await tx.wait();
       console.log(`Shielded note #${i + 1}: ${explorerTx(receipt.hash)}`);
       const index = allLeaves.length;
       allLeaves.push(commitment);
-      ownerNotes.push({index, commitment, amount: spec.amount, blinding: spec.blinding, ownerPk: users.owner.ownerPk});
+      pushNote({index, commitment, amount: spec.amount, blinding: spec.blinding, ownerPk: users.owner.ownerPk});
     }
-    writeShieldState({tokenAddr, tokenField, allLeaves, ownerNotes});
+    writeShieldState({tokenAddr, tokenField, allLeaves, notesByOwnerPk});
   }
 
   run("bb", ["write_vk", "-b", "target/shielded_transfer.json", "-o", "target/vk"], circuitsDir);
 
-  const transferPlan = [
-    {name: "Transfer 1 (Owner -> UserB)", recipient: users.userB, recipientAmount: 35n, changeAmount: 5n},
-    {name: "Transfer 2 (Owner -> UserC)", recipient: users.userC, recipientAmount: 33n, changeAmount: 7n},
-    {name: "Transfer 3 (Owner -> UserD)", recipient: users.userD, recipientAmount: 34n, changeAmount: 6n},
+  const ownerToRecipientsPlan = [
+    {name: "Transfer 1 (Owner -> UserB)", recipient: users.userB, recipientAmounts: [35n, 5n]},
+    {name: "Transfer 2 (Owner -> UserC)", recipient: users.userC, recipientAmounts: [33n, 7n]},
+    {name: "Transfer 3 (Owner -> UserD)", recipient: users.userD, recipientAmounts: [34n, 6n]},
   ];
 
   const results = [];
-  for (const plan of transferPlan) {
-    if (ownerNotes.length < 2) throw new Error(`${plan.name}: not enough owner notes to spend`);
-    const in0 = ownerNotes.shift();
-    const in1 = ownerNotes.shift();
+  for (const plan of ownerToRecipientsPlan) {
+    const [in0, in1] = popTwoNotes(users.owner.ownerPk);
     in0.allLeavesSnapshot = [...allLeaves];
     in1.allLeavesSnapshot = [...allLeaves];
 
     const outBlindings = [BigInt(7000 + results.length * 10 + 1), BigInt(7000 + results.length * 10 + 2)];
+    const route0 = routeForRecipient(plan.recipient.viewingPub, plan.recipient.routeCursor++);
+    const route1 = routeForRecipient(plan.recipient.viewingPub, plan.recipient.routeCursor++);
     const stepResult = await executeTransferStep({
       stepName: plan.name,
       poseidonRW,
@@ -802,34 +946,86 @@ async function main() {
       inNotes: [in0, in1],
       recipientPk: plan.recipient.ownerPk,
       recipientViewingPub: plan.recipient.viewingPub,
-      recipientAmount: plan.recipientAmount,
-      changePk: users.owner.ownerPk,
-      changeViewingPub: users.owner.viewingPub,
-      changeAmount: plan.changeAmount,
+      recipientAmount: plan.recipientAmounts[0],
+      changePk: plan.recipient.ownerPk,
+      changeViewingPub: plan.recipient.viewingPub,
+      changeAmount: plan.recipientAmounts[1],
       outBlindings,
+      routedChannels: [route0.channel, route1.channel],
+      routedSubchannels: [route0.subchannel, route1.subchannel],
       fee,
     });
 
     for (const created of stepResult.created) {
       const index = allLeaves.length;
       allLeaves.push(created.commitment);
-      if (created.ownerPk === users.owner.ownerPk) {
-        ownerNotes.push({
-          index,
-          commitment: created.commitment,
-          amount: created.amount,
-          blinding: created.blinding,
-          ownerPk: created.ownerPk,
-        });
-      }
+      pushNote({
+        index,
+        commitment: created.commitment,
+        amount: created.amount,
+        blinding: created.blinding,
+        ownerPk: created.ownerPk,
+      });
     }
     results.push({name: plan.name, consumed: stepResult.consumed, created: stepResult.created});
+  }
+
+  const recipientSpendPlan = [
+    {sender: users.userB, recipient: users.userG, sendAmount: 10n},
+    {sender: users.userC, recipient: users.userK, sendAmount: 15n},
+    {sender: users.userD, recipient: users.userK, sendAmount: 12n},
+  ];
+
+  for (let i = 0; i < recipientSpendPlan.length; i += 1) {
+    const plan = recipientSpendPlan[i];
+    const [in0, in1] = popTwoNotes(plan.sender.ownerPk);
+    in0.allLeavesSnapshot = [...allLeaves];
+    in1.allLeavesSnapshot = [...allLeaves];
+    const totalIn = in0.amount + in1.amount;
+    const changeAmount = totalIn - plan.sendAmount - fee;
+    if (changeAmount < 0n) throw new Error(`${plan.sender.name}: insufficient balance for planned spend`);
+    const outBlindings = [BigInt(9000 + i * 10 + 1), BigInt(9000 + i * 10 + 2)];
+    const route0 = routeForRecipient(plan.recipient.viewingPub, plan.recipient.routeCursor++);
+    const route1 = routeForRecipient(plan.sender.viewingPub, plan.sender.routeCursor++);
+    const stepResult = await executeTransferStep({
+      stepName: `Transfer ${4 + i} (${plan.sender.name} -> ${plan.recipient.name})`,
+      poseidonRW,
+      treeRW,
+      tokenRW,
+      tokenAddress: tokenAddr,
+      tokenField,
+      spendingKey: plan.sender.spendingKey,
+      inNotes: [in0, in1],
+      recipientPk: plan.recipient.ownerPk,
+      recipientViewingPub: plan.recipient.viewingPub,
+      recipientAmount: plan.sendAmount,
+      changePk: plan.sender.ownerPk,
+      changeViewingPub: plan.sender.viewingPub,
+      changeAmount,
+      outBlindings,
+      routedChannels: [route0.channel, route1.channel],
+      routedSubchannels: [route0.subchannel, route1.subchannel],
+      fee,
+    });
+
+    for (const created of stepResult.created) {
+      const index = allLeaves.length;
+      allLeaves.push(created.commitment);
+      pushNote({
+        index,
+        commitment: created.commitment,
+        amount: created.amount,
+        blinding: created.blinding,
+        ownerPk: created.ownerPk,
+      });
+    }
+    results.push({name: `${plan.sender.name}->${plan.recipient.name}`, consumed: stepResult.consumed, created: stepResult.created});
   }
 
   console.log("\n== Multi-transfer E2E success ==");
   console.log({
     transfersExecuted: results.length,
-    finalOwnerUnspentNotes: ownerNotes.length,
+    finalOwnerUnspentNotes: (notesByOwnerPk.get(ownerPkKey(users.owner.ownerPk)) || []).length,
     finalRoot: await treeRW.getLastRoot(),
     tokenField,
     shieldedToken: explorerAddr(tokenAddr),
@@ -837,17 +1033,24 @@ async function main() {
 
   const scanFrom = tokenDeployBlock > 0 ? tokenDeployBlock : 0;
   console.log("\n== Recipient scan/decrypt using viewing keys ==");
-  for (const key of ["owner", "userB", "userC", "userD"]) {
+  for (const key of ["owner", "userB", "userC", "userD", "userG", "userH", "userK"]) {
     const viewer = users[key];
     const discovered = await scanAndDecryptNotes({
       provider,
       tokenAddress: tokenAddr,
       fromBlock: scanFrom,
       viewer,
+      subchannels: [0, 1, 2, 3, 4, 5],
+    });
+    const summary = await summarizeViewerBalance({
+      viewer,
+      discovered,
+      poseidonRW,
+      tokenRW,
     });
     console.log({
       viewer: viewer.name,
-      discoveredNotes: discovered.length,
+      ...summary,
     });
   }
 
