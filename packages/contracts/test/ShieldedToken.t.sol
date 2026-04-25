@@ -34,6 +34,10 @@ contract ShieldedTokenTest is Test {
     uint256 internal alicePk = 0xA11CE;
     address internal alice;
     address internal bob = address(0xB0B);
+    bytes32 internal constant CHANNEL0 = bytes32(uint256(1));
+    bytes32 internal constant CHANNEL1 = bytes32(uint256(2));
+    bytes32 internal constant SUBCHANNEL0 = bytes32(uint256(11));
+    bytes32 internal constant SUBCHANNEL1 = bytes32(uint256(22));
 
     function setUp() public {
         alice = vm.addr(alicePk);
@@ -47,7 +51,7 @@ contract ShieldedTokenTest is Test {
         bytes32 commitment = keccak256("commitment_1");
 
         vm.prank(alice);
-        token.shield(100e18, commitment, new bytes(0));
+        token.shieldRouted(100e18, commitment, new bytes(0), CHANNEL0, SUBCHANNEL0);
 
         assertEq(token.balanceOf(alice), 900e18);
         assertTrue(tree.isKnownRoot(tree.getLastRoot()));
@@ -59,7 +63,11 @@ contract ShieldedTokenTest is Test {
         bytes32[2] memory commitments = [bytes32(uint256(333)), bytes32(uint256(444))];
         bytes[2] memory encryptedNotes = [bytes("enc-note-0"), bytes("enc-note-1")];
 
-        token.shieldedTransfer(hex"0102", nullifiers, commitments, encryptedNotes, root, token.tokenField(), 0);
+        bytes32[2] memory channels = [CHANNEL0, CHANNEL1];
+        bytes32[2] memory subchannels = [SUBCHANNEL0, SUBCHANNEL1];
+        token.shieldedTransferRouted(
+            hex"0102", nullifiers, commitments, encryptedNotes, channels, subchannels, root, token.tokenField(), 0
+        );
 
         assertTrue(token.nullifierSet(nullifiers[0]));
         assertTrue(token.nullifierSet(nullifiers[1]));
@@ -74,11 +82,15 @@ contract ShieldedTokenTest is Test {
         assertFalse(tree.isKnownRoot(unknownRoot));
 
         vm.expectRevert(ShieldedToken.InvalidRoot.selector);
-        token.shieldedTransfer(
+        bytes32[2] memory channels = [CHANNEL0, CHANNEL1];
+        bytes32[2] memory subchannels = [SUBCHANNEL0, SUBCHANNEL1];
+        token.shieldedTransferRouted(
             hex"0102",
             nullifiers,
             commitments,
             encryptedNotes,
+            channels,
+            subchannels,
             unknownRoot,
             tokenField,
             0
@@ -93,9 +105,13 @@ contract ShieldedTokenTest is Test {
         bytes32[2] memory nullifiers = [bytes32(uint256(111)), bytes32(uint256(222))];
         bytes32[2] memory commitments = [bytes32(uint256(333)), bytes32(uint256(444))];
         bytes[2] memory encryptedNotes = [bytes("enc-note-0"), bytes("enc-note-1")];
+        bytes32[2] memory channels = [CHANNEL0, CHANNEL1];
+        bytes32[2] memory subchannels = [SUBCHANNEL0, SUBCHANNEL1];
 
         vm.expectRevert(ShieldedToken.InvalidProof.selector);
-        token.shieldedTransfer(hex"0102", nullifiers, commitments, encryptedNotes, root, tokenField, 0);
+        token.shieldedTransferRouted(
+            hex"0102", nullifiers, commitments, encryptedNotes, channels, subchannels, root, tokenField, 0
+        );
     }
 
     function test_Unshield_MintsToRecipient() public {
@@ -128,9 +144,13 @@ contract ShieldedTokenTest is Test {
         bytes32[2] memory nullifiers = [bytes32(uint256(111)), bytes32(uint256(222))];
         bytes32[2] memory commitments = [bytes32(uint256(333)), bytes32(uint256(444))];
         bytes[2] memory encryptedNotes = [bytes("enc-note-0"), bytes("enc-note-1")];
+        bytes32[2] memory channels = [CHANNEL0, CHANNEL1];
+        bytes32[2] memory subchannels = [SUBCHANNEL0, SUBCHANNEL1];
 
         vm.expectRevert(ShieldedToken.InvalidRoot.selector);
-        token.shieldedTransfer(hex"0102", nullifiers, commitments, encryptedNotes, oldest, tokenField, 0);
+        token.shieldedTransferRouted(
+            hex"0102", nullifiers, commitments, encryptedNotes, channels, subchannels, oldest, tokenField, 0
+        );
     }
 
 }
