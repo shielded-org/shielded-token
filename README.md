@@ -61,10 +61,10 @@ Shielding and unshielding remain **boundary actions** on a public chain (visible
 Single contract combining:
 
 - **ERC20 surface**: `transfer`, `approve`, `transferFrom`, `balanceOf`, `totalSupply` for transparent interoperability
-- **Embedded pool**: `shield`, `shieldedTransfer`, `unshield`
+- **Embedded pool**: `shieldRouted`, `shieldedTransferRouted`, `unshield`
 - **Nullifier set** and **UltraHonk** verification against the shared Merkle tree
 - **`tokenField`**: `bytes32(uint256(uint160(address(this))))` so the Noir circuit binds to this token address
-- **`NewCommitment`**: encrypted payloads for recipient-side discovery (optional on `shield` if calldata empty)
+- **`RoutedCommitment(channel, subchannel, encryptedNote)`**: indexed encrypted payloads for channel/subchannel-scoped recipient discovery
 
 ### `IncrementalMerkleTree.sol`
 On-chain note commitment tree.
@@ -120,7 +120,7 @@ Health endpoint:
 
 Relayer behavior:
 
-- Accepts proof bundle + commitments/nullifiers/encrypted notes
+- Accepts proof bundle + commitments/nullifiers/encrypted notes + `channels`/`subchannels`
 - Broadcasts tx with relayer signer
 - Polls for receipt and updates request status (`submitted`, `confirmed`, `failed`, `timeout`)
 
@@ -174,8 +174,8 @@ This script does all of the following:
 - Generates verifier from VK
 - Deploys Poseidon/hash adapter/verifier/tree
 - Deploys monolithic `ShieldedToken`
-- Deposits initial notes via `shield` (public balance → commitments)
-- Generates and submits 3 shielded transfers through relayer
+- Deposits initial notes via `shieldRouted` (public balance → commitments, routed discovery events)
+- Generates and submits routed shielded transfers through relayer
 - Waits for on-chain confirmations
 - Scans and decrypts recipient notes via viewing keys
 
@@ -210,9 +210,9 @@ Example: Alice privately sends shielded value to Bob.
 5. Alice encrypts each output note using ECDH + AEAD with recipient viewing pubkey.
 6. Alice generates Noir witness and UltraHonk proof locally.
 7. Alice sends proof bundle to relayer over HTTP.
-8. Relayer submits `shieldedTransfer` on-chain.
+8. Relayer submits `shieldedTransferRouted` on-chain.
 9. Pool verifies proof, marks nullifiers spent, inserts commitments, emits encrypted note events.
-10. Bob scans `NewCommitment` events.
+10. Bob scans `RoutedCommitment` events for his channel/subchannel paths.
 11. Bob attempts decrypt with his viewing key.
 12. Bob discovers only notes addressed to him and stores them locally for future spends.
 
@@ -237,7 +237,7 @@ Encrypted note envelope fields:
 
 Discovery process:
 
-- Query `NewCommitment` logs from token deploy block
+- Query `RoutedCommitment` logs filtered by `(channel, subchannel)` from token deploy block
 - Attempt decrypt with recipient viewing private key
 - Successful decrypt means note belongs to that recipient
 
