@@ -25,7 +25,8 @@ If RPC and signer are not configured, the relayer falls back to stub mode and re
 
 `POST /relay/shielded-transfer` expects:
 
-- `shieldedToken` (address)
+- `shieldedTarget` (address; ShieldedToken or ShieldedERC20Pool)
+- `shieldedToken` (legacy alias still accepted)
 - `proof` (hex bytes)
 - `nullifiers` (`bytes32[2]`)
 - `newCommitments` (`bytes32[2]`)

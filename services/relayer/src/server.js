@@ -45,8 +45,9 @@ function validatePayload(body) {
   if (body.nullifiers.length !== 2 || body.newCommitments.length !== 2 || body.encryptedNotes.length !== 2) {
     return "Expected 2 nullifiers, 2 commitments, and 2 encrypted notes";
   }
-  if (typeof body.shieldedToken !== "string" || !ethers.isAddress(body.shieldedToken)) {
-    return "Missing or invalid shieldedToken address";
+  const target = body.shieldedTarget ?? body.shieldedToken;
+  if (typeof target !== "string" || !ethers.isAddress(target)) {
+    return "Missing or invalid shieldedTarget address";
   }
   if (typeof body.merkleRoot !== "string" || !ethers.isHexString(body.merkleRoot, 32)) {
     return "Invalid merkleRoot";
@@ -69,8 +70,9 @@ function validatePayload(body) {
 }
 
 async function submitShieldedTransferOnchain(body) {
-  const token = new ethers.Contract(body.shieldedToken, SHIELDED_TRANSFER_ABI, relayerSigner);
-  const tx = await token.shieldedTransferRouted(
+  const target = body.shieldedTarget ?? body.shieldedToken;
+  const contract = new ethers.Contract(target, SHIELDED_TRANSFER_ABI, relayerSigner);
+  const tx = await contract.shieldedTransferRouted(
     body.proof,
     body.nullifiers,
     body.newCommitments,
