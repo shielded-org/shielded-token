@@ -8,7 +8,12 @@ Privacy-focused shielded token system for EVM using:
 - Relayer-mediated on-chain submission
 - Encrypted note discovery for recipients via viewing keys
 
-This repo implements a **STRK20-style monolith**: a single `ShieldedToken` contract coordinates **public ERC20 balances** and the **embedded privacy pool** (Merkle commitments, nullifiers, proofs, encrypted note discovery). Moving value into the pool uses `shield` (burn public balance + insert commitment); private transfers and `unshield` operate on that same coordinator.
+This repo supports two deployment patterns:
+
+- **Monolith (`ShieldedToken`)**: a single contract coordinates public ERC20 balances + embedded privacy pool.
+- **Multi-token pool (`ShieldedERC20Pool`)**: an external pool contract that can hold and route shielded notes for multiple allowlisted ERC20 tokens.
+
+Both patterns use the same Merkle/nullifier/proof model and routed encrypted note discovery (`RoutedCommitment`).
 
 ---
 
@@ -66,6 +71,16 @@ Single contract combining:
 - **`tokenField`**: `bytes32(uint256(uint160(address(this))))` so the Noir circuit binds to this token address
 - **`RoutedCommitment(channel, subchannel, encryptedNote)`**: indexed encrypted payloads for channel/subchannel-scoped recipient discovery
 
+### `ShieldedERC20Pool.sol` (multi-token pool)
+
+Standalone privacy pool for existing ERC20s:
+
+- **Token-aware shielding**: `shieldRouted(token, amount, commitment, encryptedNote, channel, subchannel)`
+- **Token-bound transfer verification**: `shieldedTransferRouted(..., tokenField, fee)` where `tokenField` must map to an enabled ERC20
+- **Unshield to EOA**: `unshield(...)` transfers underlying ERC20 from pool custody to recipient
+- **Safety controls**: token allowlist (`enabledToken`), nullifier replay protection, root checks, and non-reentrancy
+- **Same routed discovery surface**: emits `RoutedCommitment(channel, subchannel, encryptedNote)` like monolith mode
+
 ### `IncrementalMerkleTree.sol`
 On-chain note commitment tree.
 
@@ -121,6 +136,9 @@ Health endpoint:
 Relayer behavior:
 
 - Accepts proof bundle + commitments/nullifiers/encrypted notes + `channels`/`subchannels`
+- Supports both targets:
+  - monolith via `shieldedToken` (legacy field)
+  - pool/monolith via `shieldedTarget` (preferred field)
 - Broadcasts tx with relayer signer
 - Polls for receipt and updates request status (`submitted`, `confirmed`, `failed`, `timeout`)
 
@@ -196,6 +214,50 @@ Required env: `TESTNET_RPC_URL`, `PRIVATE_KEY` (deployer, `0x` optional), and re
 - **Transfers only** (after a run that saved state post-shield, before transfers finished): `TRANSFERS_ONLY=1` plus the same deployment and `scripts/sepolia-e2e-state.json`. On success the state file is removed.
 
 Do not commit `.env` files or private keys. If a key was pasted into chat or committed, rotate it.
+
+### 5c) Local multi-token ERC20 pool E2E
+
+```bash
+npm run e2e:hardhat-local-pool
+```
+
+This deploys:
+
+- `MockERC20` (underlying token)
+- `ShieldedERC20Pool` (multi-token routed privacy pool)
+- Poseidon/verifier/tree stack
+
+Then it runs the same routed private transfer flow and balance summary over pool-held ERC20 notes.
+
+### 5d) Sepolia multi-token ERC20 pool E2E
+
+```bash
+node --env-file=.env.sepolia scripts/sepolia-erc20-pool-e2e.mjs
+```
+
+Or via npm script:
+
+```bash
+npm run e2e:sepolia-pool
+```
+
+Key env knobs:
+
+- `TESTNET_POOL_TOKEN_ADDRESS` (existing Sepolia ERC20 to use as underlying token)
+- `DEPLOY_MOCK_TOKEN=1` (optional demo mode; deploys `MockERC20` on Sepolia)
+- `SKIP_DEPLOY=1` (reuse `scripts/sepolia-pool-deployment.json` / `SEPOLIA_POOL_*` env)
+- `ETHERSCAN_API_KEY` + `VERIFY_CONTRACTS=1` (optional deploy-time verification)
+
+### 5e) Frontend integration note (multi-token pool)
+
+For app integration with `ShieldedERC20Pool`, keep one wallet state per user:
+
+- Spending key / viewing key material (local, never sent on-chain)
+- Decrypted note set grouped by `tokenField`
+- Spent-state tracking via nullifier checks
+- Merkle sync state from pool events (`Shield`, `ShieldedTransfer`, `RoutedCommitment`)
+
+Existing Merkle trees are expected in production; clients should hydrate from chain/indexer and generate proofs against currently known roots.
 
 ---
 
