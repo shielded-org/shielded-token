@@ -38,6 +38,7 @@ contract ShieldedTokenTest is Test {
     bytes32 internal constant CHANNEL1 = bytes32(uint256(2));
     bytes32 internal constant SUBCHANNEL0 = bytes32(uint256(11));
     bytes32 internal constant SUBCHANNEL1 = bytes32(uint256(22));
+    bytes32 internal constant FEE_RECIPIENT_PK = bytes32(uint256(123456));
 
     function setUp() public {
         alice = vm.addr(alicePk);
@@ -66,7 +67,7 @@ contract ShieldedTokenTest is Test {
         bytes32[2] memory channels = [CHANNEL0, CHANNEL1];
         bytes32[2] memory subchannels = [SUBCHANNEL0, SUBCHANNEL1];
         token.shieldedTransferRouted(
-            hex"0102", nullifiers, commitments, encryptedNotes, channels, subchannels, root, token.tokenField(), 0
+            hex"0102", nullifiers, commitments, encryptedNotes, channels, subchannels, root, token.tokenField(), 0, FEE_RECIPIENT_PK
         );
 
         assertTrue(token.nullifierSet(nullifiers[0]));
@@ -93,7 +94,8 @@ contract ShieldedTokenTest is Test {
             subchannels,
             unknownRoot,
             tokenField,
-            0
+            0,
+            FEE_RECIPIENT_PK
         );
     }
 
@@ -110,7 +112,7 @@ contract ShieldedTokenTest is Test {
 
         vm.expectRevert(ShieldedToken.InvalidProof.selector);
         token.shieldedTransferRouted(
-            hex"0102", nullifiers, commitments, encryptedNotes, channels, subchannels, root, tokenField, 0
+            hex"0102", nullifiers, commitments, encryptedNotes, channels, subchannels, root, tokenField, 0, FEE_RECIPIENT_PK
         );
     }
 
@@ -149,7 +151,7 @@ contract ShieldedTokenTest is Test {
 
         vm.expectRevert(ShieldedToken.InvalidRoot.selector);
         token.shieldedTransferRouted(
-            hex"0102", nullifiers, commitments, encryptedNotes, channels, subchannels, oldest, tokenField, 0
+            hex"0102", nullifiers, commitments, encryptedNotes, channels, subchannels, oldest, tokenField, 0, FEE_RECIPIENT_PK
         );
     }
 

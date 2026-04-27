@@ -123,7 +123,8 @@ contract ShieldedERC20Pool {
         bytes32[2] calldata subchannels,
         bytes32 merkleRoot,
         bytes32 token,
-        uint64 fee
+        uint256 fee,
+        bytes32 feeRecipientPk
     ) external {
         address tokenAddress = _tokenFieldToAddress(token);
         if (!enabledToken[tokenAddress]) revert TokenNotEnabled(tokenAddress);
@@ -133,7 +134,7 @@ contract ShieldedERC20Pool {
         if (newCommitments[0] == bytes32(0) || newCommitments[1] == bytes32(0)) revert InvalidCommitment();
         if (!merkleTree.isKnownRoot(merkleRoot)) revert InvalidRoot();
 
-        bytes32[] memory publicInputs = new bytes32[](7);
+        bytes32[] memory publicInputs = new bytes32[](12);
         publicInputs[0] = token;
         publicInputs[1] = merkleRoot;
         publicInputs[2] = nullifiers[0];
@@ -141,6 +142,11 @@ contract ShieldedERC20Pool {
         publicInputs[4] = newCommitments[0];
         publicInputs[5] = newCommitments[1];
         publicInputs[6] = bytes32(uint256(fee));
+        publicInputs[7] = feeRecipientPk;
+        publicInputs[8] = bytes32(uint256(0)); // mode=transfer
+        publicInputs[9] = bytes32(0); // unshield recipient
+        publicInputs[10] = bytes32(0); // unshield amount
+        publicInputs[11] = bytes32(0); // unshield token address
 
         if (!verifier.verify(proof, publicInputs)) revert InvalidProof();
 
@@ -169,12 +175,19 @@ contract ShieldedERC20Pool {
         if (nullifier == bytes32(0)) revert InvalidNullifier();
         if (!merkleTree.isKnownRoot(merkleRoot)) revert InvalidRoot();
 
-        bytes32[] memory publicInputs = new bytes32[](5);
-        publicInputs[0] = nullifier;
-        publicInputs[1] = bytes32(uint256(uint160(recipient)));
-        publicInputs[2] = bytes32(amount);
-        publicInputs[3] = merkleRoot;
-        publicInputs[4] = bytes32(uint256(uint160(token)));
+        bytes32[] memory publicInputs = new bytes32[](12);
+        publicInputs[0] = bytes32(uint256(uint160(token)));
+        publicInputs[1] = merkleRoot;
+        publicInputs[2] = nullifier;
+        publicInputs[3] = bytes32(0); // nullifier lane #2 unused in unshield
+        publicInputs[4] = bytes32(0); // output commitment #1 unused in unshield
+        publicInputs[5] = bytes32(0); // output commitment #2 unused in unshield
+        publicInputs[6] = bytes32(0); // fee unused in unshield
+        publicInputs[7] = bytes32(0); // fee recipient pk unused in unshield
+        publicInputs[8] = bytes32(uint256(1)); // mode=unshield
+        publicInputs[9] = bytes32(uint256(uint160(recipient)));
+        publicInputs[10] = bytes32(amount);
+        publicInputs[11] = bytes32(uint256(uint160(token)));
 
         if (!verifier.verify(proof, publicInputs)) revert InvalidProof();
 
