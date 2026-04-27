@@ -23,7 +23,7 @@ const SHIELDED_TRANSFER_ABI = [
   "function shieldedTransferRouted(bytes proof, bytes32[2] nullifiers, bytes32[2] newCommitments, bytes[2] encryptedNotes, bytes32[2] channels, bytes32[2] subchannels, bytes32 merkleRoot, bytes32 token, uint256 fee, bytes32 feeRecipientPk) external",
 ];
 const UNSHIELD_ABI = [
-  "function unshield(bytes proof, bytes32 nullifier, address token, address recipient, uint256 amount, bytes32 merkleRoot) external",
+  "function unshield(bytes proof, bytes32 nullifier, address token, address recipient, uint256 amount, bytes32 merkleRoot, bytes32 newCommitment, bytes encryptedNote, bytes32 channel, bytes32 subchannel) external",
 ];
 
 const HONK_ERROR_SELECTORS = {
@@ -152,6 +152,18 @@ function validateUnshieldPayload(body) {
   if (typeof body.token !== "string" || !ethers.isAddress(body.token)) return "Invalid token address";
   if (typeof body.recipient !== "string" || !ethers.isAddress(body.recipient)) return "Invalid recipient address";
   if (body.amount == null) return "Missing amount";
+  if (body.newCommitment != null && (typeof body.newCommitment !== "string" || !ethers.isHexString(body.newCommitment, 32))) {
+    return "Invalid newCommitment";
+  }
+  if (body.channel != null && (typeof body.channel !== "string" || !ethers.isHexString(body.channel, 32))) {
+    return "Invalid channel";
+  }
+  if (body.subchannel != null && (typeof body.subchannel !== "string" || !ethers.isHexString(body.subchannel, 32))) {
+    return "Invalid subchannel";
+  }
+  if (body.encryptedNote != null && (typeof body.encryptedNote !== "string" || !body.encryptedNote.startsWith("0x"))) {
+    return "Invalid encryptedNote";
+  }
   return null;
 }
 
@@ -231,6 +243,10 @@ async function submitUnshieldOnchain(body) {
         body.recipient,
         BigInt(body.amount),
         body.merkleRoot,
+        body.newCommitment ?? ethers.ZeroHash,
+        body.encryptedNote ?? "0x",
+        body.channel ?? ethers.ZeroHash,
+        body.subchannel ?? ethers.ZeroHash,
         {gasLimit: body.gasLimit ?? defaultShieldedTransferGasLimit}
       );
       return tx.hash;

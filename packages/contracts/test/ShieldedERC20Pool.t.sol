@@ -148,7 +148,18 @@ contract ShieldedERC20PoolTest is Test {
         bytes32 root = tree.getLastRoot();
         bytes32 nullifier = bytes32(uint256(999));
 
-        pool.unshield(hex"CAFE", nullifier, address(tokenA), bob, 70e18, root);
+        pool.unshield(
+            hex"CAFE",
+            nullifier,
+            address(tokenA),
+            bob,
+            70e18,
+            root,
+            bytes32(0),
+            new bytes(0),
+            bytes32(0),
+            bytes32(0)
+        );
 
         assertEq(tokenA.balanceOf(bob), 70e18);
         assertTrue(pool.nullifierSet(nullifier));

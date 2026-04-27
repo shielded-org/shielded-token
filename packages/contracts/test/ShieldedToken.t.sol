@@ -120,7 +120,7 @@ contract ShieldedTokenTest is Test {
         bytes32 root = tree.getLastRoot();
         bytes32 nullifier = bytes32(uint256(999));
 
-        token.unshield(hex"CAFE", nullifier, bob, 70e18, root);
+        token.unshield(hex"CAFE", nullifier, bob, 70e18, root, bytes32(0), new bytes(0), bytes32(0), bytes32(0));
 
         assertEq(token.balanceOf(bob), 70e18);
         assertTrue(token.nullifierSet(nullifier));
@@ -130,9 +130,9 @@ contract ShieldedTokenTest is Test {
         bytes32 root = tree.getLastRoot();
         bytes32 nullifier = bytes32(uint256(999));
 
-        token.unshield(hex"CAFE", nullifier, bob, 10e18, root);
+        token.unshield(hex"CAFE", nullifier, bob, 10e18, root, bytes32(0), new bytes(0), bytes32(0), bytes32(0));
         vm.expectRevert();
-        token.unshield(hex"CAFE", nullifier, bob, 10e18, root);
+        token.unshield(hex"CAFE", nullifier, bob, 10e18, root, bytes32(0), new bytes(0), bytes32(0), bytes32(0));
     }
 
     function test_RootHistoryWindowExpiresOldRoot() public {

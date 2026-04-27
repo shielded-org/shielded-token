@@ -92,12 +92,11 @@ async function noteCommitment(
 export async function executePrivateTransfer(params: {
   relayerUrl: string;
   senderSpendingKey: bigint;
+  senderOwnerPk: bigint;
   senderViewingPriv: bigint;
   senderViewingPub: `0x${string}`;
   recipientOwnerPk: bigint;
   recipientViewingPub: `0x${string}`;
-  feeRecipientOwnerPk: bigint;
-  feeRecipientViewingPub: `0x${string}`;
   onStatus?: (msg: string) => void;
   relayerRequestTimeoutMs?: number;
   scanFromBlock?: number;
@@ -138,91 +137,106 @@ export async function executePrivateTransfer(params: {
     const isSpent = await pool.nullifierSet(nf);
     if (!isSpent) spendable.push(note);
   }
-  if (spendable.length < 2) {
-    throw new Error("Need at least 2 unspent notes for private transfer.");
+  if (spendable.length < 1) {
+    throw new Error("Need at least 1 unspent note for private transfer.");
   }
   spendable.sort((a, b) => (a.amount < b.amount ? -1 : a.amount > b.amount ? 1 : 0));
   type Candidate = {
     i: number;
-    j: number;
+    j: number | null;
     totalIn: bigint;
-    fee: bigint;
     recipientAmount: bigint;
+    changeAmount: bigint;
   };
   const candidates: Candidate[] = [];
+  const target = params.maxRecipientAmount ?? spendable[0].amount;
+
+  for (let i = 0; i < spendable.length; i += 1) {
+    const totalIn = spendable[i].amount;
+    if (totalIn >= target) {
+      const recipientAmount = target;
+      candidates.push({i, j: null, totalIn, recipientAmount, changeAmount: totalIn - recipientAmount});
+    }
+  }
   for (let i = 0; i < spendable.length; i += 1) {
     for (let j = i + 1; j < spendable.length; j += 1) {
       const totalIn = spendable[i].amount + spendable[j].amount;
-      const fee = (totalIn * 5n) / 1000n;
-      if (fee === 0n) continue;
-      const recipientAmount = totalIn - fee;
-      candidates.push({i, j, totalIn, fee, recipientAmount});
+      if (totalIn >= target) {
+        const recipientAmount = target;
+        candidates.push({i, j, totalIn, recipientAmount, changeAmount: totalIn - recipientAmount});
+      }
     }
   }
   if (candidates.length === 0) {
-    throw new Error("Could not find 2 spendable notes with non-zero fee. Use larger note amounts.");
+    throw new Error("No available spendable note combination can satisfy the requested private amount.");
   }
   let chosen: Candidate | null = null;
-  if (params.maxRecipientAmount != null) {
-    const bounded = candidates.filter((c) => c.recipientAmount <= params.maxRecipientAmount!);
-    if (bounded.length === 0) {
-      throw new Error("No available 2-note combination can satisfy the requested private amount.");
-    }
-    bounded.sort((a, b) => (a.recipientAmount < b.recipientAmount ? 1 : a.recipientAmount > b.recipientAmount ? -1 : 0));
-    chosen = bounded[0];
-  } else {
-    candidates.sort((a, b) => (a.recipientAmount < b.recipientAmount ? -1 : a.recipientAmount > b.recipientAmount ? 1 : 0));
-    chosen = candidates[0];
-  }
+  candidates.sort((a, b) => (a.changeAmount < b.changeAmount ? -1 : a.changeAmount > b.changeAmount ? 1 : 0));
+  chosen = candidates[0];
   mark(`Spendable notes=${spendable.length}; preparing proof inputs`);
   const in0 = spendable[chosen.i];
-  const in1 = spendable[chosen.j];
+  const in1 = chosen.j != null ? spendable[chosen.j] : null;
   const totalIn = chosen.totalIn;
-  const fee = chosen.fee;
   const recipientAmount = chosen.recipientAmount;
-  const changeAmount = fee;
+  const changeAmount = chosen.changeAmount;
   const outBlinding0 = BigInt(ethers.randomBytes(31).reduce((a, b) => (a << 8n) + BigInt(b), 0n) + 1n);
   const outBlinding1 = BigInt(ethers.randomBytes(31).reduce((a, b) => (a << 8n) + BigInt(b), 0n) + 1n);
   const nullifier0 = await poseidonHash2(poseidon, params.senderSpendingKey, BigInt(in0.commitment));
-  const nullifier1 = await poseidonHash2(poseidon, params.senderSpendingKey, BigInt(in1.commitment));
+  const nullifier1 = in1
+    ? await poseidonHash2(poseidon, params.senderSpendingKey, BigInt(in1.commitment))
+    : ("0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`);
   const outCommitment0 = await noteCommitment(poseidon, params.recipientOwnerPk, tokenField, recipientAmount, outBlinding0);
-  const outCommitment1 = await noteCommitment(poseidon, params.feeRecipientOwnerPk, tokenField, changeAmount, outBlinding1);
-  const merkle = await buildInputMerklePaths({
-    provider,
-    poseidonAddress: CONTRACTS.poseidon as `0x${string}`,
-    merkleTreeAddress: CONTRACTS.merkleTree as `0x${string}`,
-    targetCommitments: [in0.commitment, in1.commitment],
-  });
+  const outCommitment1 = await noteCommitment(poseidon, params.senderOwnerPk, tokenField, changeAmount, outBlinding1);
+  const merkle = in1
+    ? await buildInputMerklePaths({
+        provider,
+        poseidonAddress: CONTRACTS.poseidon as `0x${string}`,
+        merkleTreeAddress: CONTRACTS.merkleTree as `0x${string}`,
+        targetCommitments: [in0.commitment, in1.commitment],
+      })
+    : (() => null)();
+  const merkleSingle = !in1
+    ? await buildMerklePathForCommitment({
+        provider,
+        poseidonAddress: CONTRACTS.poseidon as `0x${string}`,
+        merkleTreeAddress: CONTRACTS.merkleTree as `0x${string}`,
+        targetCommitment: in0.commitment,
+      })
+    : null;
+  const zero32 = "0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`;
+  const zeroPath = new Array(20).fill(zero32) as `0x${string}`[];
+  const zeroDirs = new Array(20).fill(false) as boolean[];
+  const merkleRoot = in1 ? merkle!.root : merkleSingle!.root;
   mark("Generating proof");
   const proof = await generateProof({
     spendingKey: params.senderSpendingKey,
-    inAmounts: [in0.amount, in1.amount],
-    inBlindings: [in0.blinding, in1.blinding],
-    merkleSiblings: [merkle.siblings[0], merkle.siblings[1]],
-    merkleDirections: [merkle.directions[0], merkle.directions[1]],
+    inAmounts: [in0.amount, in1 ? in1.amount : 0n],
+    inBlindings: [in0.blinding, in1 ? in1.blinding : zero32],
+    merkleSiblings: [in1 ? merkle!.siblings[0] : merkleSingle!.siblings, in1 ? merkle!.siblings[1] : zeroPath],
+    merkleDirections: [in1 ? merkle!.directions[0] : merkleSingle!.directions, in1 ? merkle!.directions[1] : zeroDirs],
     outAmounts: [recipientAmount, changeAmount],
-    outRecipientPks: [toHex32(params.recipientOwnerPk), toHex32(params.feeRecipientOwnerPk)],
+    outRecipientPks: [toHex32(params.recipientOwnerPk), toHex32(params.senderOwnerPk)],
     outBlindings: [toHex32(outBlinding0), toHex32(outBlinding1)],
     token: tokenField,
-    merkleRoot: merkle.root,
+    merkleRoot,
     nullifiers: [nullifier0, nullifier1],
     outCommitments: [outCommitment0, outCommitment1],
-    fee,
-    feeRecipientPk: toHex32(params.feeRecipientOwnerPk),
+    fee: 0n,
+    feeRecipientPk: zero32,
   });
   const proofBytes = ethers.getBytes(proof.proof).length;
   const proofDigest = ethers.keccak256(proof.proof).slice(0, 18);
   mark(`Proof generated bytes=${proofBytes} hash=${proofDigest}...; encrypting output notes`);
 
   const route0 = routeForRecipient(params.recipientViewingPub, 0);
-  const route1 = routeForRecipient(params.feeRecipientViewingPub, 0);
+  const route1 = routeForRecipient(params.senderViewingPub, 0);
   const encryptedNote0 = await encryptNoteECDH(
     {token: tokenField, amount: recipientAmount.toString(), blinding: toHex32(outBlinding0), commitment: outCommitment0},
     params.recipientViewingPub
   );
   const encryptedNote1 = await encryptNoteECDH(
     {token: tokenField, amount: changeAmount.toString(), blinding: toHex32(outBlinding1), commitment: outCommitment1},
-    params.feeRecipientViewingPub
+    params.senderViewingPub
   );
 
   mark("Submitting bundle to relayer");
@@ -242,10 +256,10 @@ export async function executePrivateTransfer(params: {
         encryptedNotes: [encryptedNote0, encryptedNote1],
         channels: [route0.channel, route1.channel],
         subchannels: [route0.subchannel, route1.subchannel],
-        merkleRoot: merkle.root,
+        merkleRoot,
         token: tokenField,
-        fee: fee.toString(),
-        feeRecipientPk: toHex32(params.feeRecipientOwnerPk),
+        fee: "0",
+        feeRecipientPk: zero32,
         gasLimit: 16_000_000,
       }),
     });
@@ -269,8 +283,8 @@ export async function executePrivateTransfer(params: {
   return {
     ...payload,
     recipientAmount: recipientAmount.toString(),
-    fee: fee.toString(),
-    consumedCommitments: [in0.commitment, in1.commitment] as [`0x${string}`, `0x${string}`],
+    fee: "0",
+    consumedCommitments: [in0.commitment, (in1?.commitment ?? zero32)] as [`0x${string}`, `0x${string}`],
   };
 }
 
@@ -281,6 +295,7 @@ export async function executeUnshield(params: {
   senderViewingPub: `0x${string}`;
   recipientAddress: `0x${string}`;
   amount: bigint;
+  senderOwnerPk: bigint;
   onStatus?: (msg: string) => void;
   relayerRequestTimeoutMs?: number;
   scanFromBlock?: number;
@@ -318,17 +333,40 @@ export async function executeUnshield(params: {
   for (const note of discovered) {
     const noteTokenField = normalizeTokenField(note.token);
     if (!noteTokenField || noteTokenField !== tokenFieldNorm) continue;
-    if (note.amount !== params.amount) continue;
+    if (note.amount < params.amount) continue;
     const nf = await poseidonHash2(poseidon, params.senderSpendingKey, BigInt(note.commitment));
     const isSpent = await pool.nullifierSet(nf);
     if (!isSpent) candidates.push(note);
   }
   if (candidates.length === 0) {
     throw new Error(
-      `No unspent note found with exact amount ${params.amount.toString()} for selected token.`
+      `No unspent note found with amount >= ${params.amount.toString()} for selected token.`
     );
   }
+  candidates.sort((a, b) => (a.amount < b.amount ? -1 : a.amount > b.amount ? 1 : 0));
   const note = candidates[0];
+  const changeAmount = note.amount - params.amount;
+  const changeBlinding =
+    changeAmount > 0n
+      ? (BigInt(ethers.randomBytes(31).reduce((a, b) => (a << 8n) + BigInt(b), 0n)) || 1n)
+      : 0n;
+  const changeCommitment =
+    changeAmount > 0n
+      ? await noteCommitment(poseidon, params.senderOwnerPk, tokenField, changeAmount, changeBlinding)
+      : ("0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`);
+  const changeNote =
+    changeAmount > 0n
+      ? await encryptNoteECDH(
+          {
+            token: tokenField,
+            amount: changeAmount.toString(),
+            blinding: toHex32(changeBlinding),
+            commitment: changeCommitment,
+          },
+          params.senderViewingPub
+        )
+      : ("0x" as `0x${string}`);
+  const changeRoute = routeForRecipient(params.senderViewingPub, 0);
   const nullifier = await poseidonHash2(poseidon, params.senderSpendingKey, BigInt(note.commitment));
   const merkle = await buildMerklePathForCommitment({
     provider,
@@ -350,6 +388,10 @@ export async function executeUnshield(params: {
     recipient: params.recipientAddress,
     amount: params.amount,
     tokenAddress: selectedToken,
+    changeAmount,
+    changeOwnerPk: toHex32(params.senderOwnerPk),
+    changeBlinding: toHex32(changeBlinding),
+    changeCommitment,
   });
   const proofBytes = ethers.getBytes(proof.proof).length;
   const proofDigest = ethers.keccak256(proof.proof).slice(0, 18);
@@ -371,6 +413,10 @@ export async function executeUnshield(params: {
         recipient: params.recipientAddress,
         amount: params.amount.toString(),
         merkleRoot: merkle.root,
+        newCommitment: changeCommitment,
+        encryptedNote: changeNote,
+        channel: changeRoute.channel,
+        subchannel: changeRoute.subchannel,
         gasLimit: 16_000_000,
       }),
     });

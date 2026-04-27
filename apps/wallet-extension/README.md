@@ -14,12 +14,12 @@ This extension workspace is a MetaMask-style wallet surface tailored to this pro
 
 Configured in `src/config.ts`:
 
-- Poseidon: `0x9326A6EF88A986286D4B557A9951602182a397Ba`
-- Poseidon Hasher: `0x81E5BDC2167BAD2675792D5B87ec6D70f4bdc268`
-- Verifier: `0x8Fde56DB65E28853d3e8eecB1033ccAdB34540E7`
-- MerkleTree: `0x73C03CB432823F3c0B70a8d5a097738260Fb7aae`
-- Shielded ERC20 Pool: `0x23228B4c59CA11597346802D6625C834D44c4922`
-- Token: `0x2F3dAD877Fc7394c08Be9e323B0CBc6D5BEcFA4A`
+- Poseidon: `0xa9CC305Af95542673aea1518881B6F1E7A8DE3b8`
+- Poseidon Hasher: `0xE6d12EfF9db5FDb548Aa17Ad1587623FFAe3BE96`
+- Verifier: `0xf45A783A47c68570b9D786a291e934F6A6B70950`
+- MerkleTree: `0x3C4A041C4145B7FEF8C341Ca10D162A717adcc7A`
+- Shielded ERC20 Pool: `0xDd10f44Bc04451f0e1B698F5a8422f56d0d05966`
+- Token: `0x9DBEd8AB4A05b5E4b6aF3bf61AA3051F6caa91b4`
 
 ## File map
 
@@ -80,7 +80,9 @@ Private transfer now performs:
 3. witness generation + proof generation in browser via Noir + bb.js
 4. relayer submission to `shieldedTransferRouted` on Sepolia pool
 
-UI requires recipient `owner_pk` and recipient `viewingPub` for private sends.
+UI supports a single recipient `shielded address` (`shd_...`) for private sends. Advanced mode can still accept raw `owner_pk` + `viewingPub`.
+
+Private transfer supports both single-note and two-note spends. Users can transfer any amount up to available private balance; leftover amount is returned as a private change note.
 
 ## Notes on unshield
 
@@ -89,6 +91,6 @@ Unshield flow supports withdrawing to either:
 - your own EOA address, or
 - a custom recipient address.
 
-Current circuit path unshields an exact note amount. If you need a different amount, first reshape note denominations using private transfers.
+Unshield now supports both full-note and partial withdrawals. Partial unshield creates a private change note back to the sender in the same transaction.
 
 Both transfer and unshield use `public/circuits/shielded_transfer.json` (`mode=0` transfer, `mode=1` unshield).

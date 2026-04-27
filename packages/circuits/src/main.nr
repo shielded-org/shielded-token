@@ -61,6 +61,8 @@ fn main(
 ) {
     // Ownership is tied to a public key hash derived from spending key.
     let owner_pk = poseidon2_hash2(spending_key, 1);
+    // Single-note spend is represented by nullifiers[1] == 0.
+    let use_second_input = if nullifiers[1] == 0 { 0 } else { 1 };
 
     for i in 0..2 {
         let in_note = Note {
@@ -70,9 +72,9 @@ fn main(
             blinding: in_blindings[i],
         };
         let input_commitment = hash_note(in_note);
-        // mode=0(transfer): validate both inputs.
+        // mode=0(transfer): validate input 0 and optionally input 1.
         // mode=1(unshield): validate only input 0.
-        let should_validate_input = if i == 0 { 1 } else { 1 - mode };
+        let should_validate_input = if i == 0 { 1 } else { (1 - mode) * use_second_input };
         assert((if verify_merkle_path(input_commitment, merkle_siblings[i], merkle_directions[i], merkle_root) { 1 } else { 0 } - 1) * should_validate_input == 0);
 
         let expected_nf = hash_nullifier(spending_key, input_commitment);
@@ -85,7 +87,10 @@ fn main(
             blinding: out_blindings[i],
         };
         let expected_out = hash_note(out_note);
-        assert((out_commitments[i] - expected_out) * (1 - mode) == 0);
+        // mode=0(transfer): validate both outputs.
+        // mode=1(unshield): validate only output 0 as private change note.
+        let should_validate_output = if i == 0 { 1 } else { 1 - mode };
+        assert((out_commitments[i] - expected_out) * should_validate_output == 0);
     }
 
     // mode must be binary: {0,1}
@@ -94,27 +99,26 @@ fn main(
     // mode=0 transfer: value is conserved into output notes.
     assert((in_amounts[0] + in_amounts[1] - (out_amounts[0] + out_amounts[1])) * (1 - mode) == 0);
 
-    // mode=0 transfer: if fee > 0, output #1 owner must be fee recipient and output #1 amount must equal fee.
-    assert((out_recipient_pks[1] - fee_recipient_pk) * fee * (1 - mode) == 0);
-    assert((out_amounts[1] - fee) * fee * (1 - mode) == 0);
+    // mode=0 transfer in wallet flow uses recipient + private change outputs (no explicit fee note).
+    assert(fee * (1 - mode) == 0);
+    assert(fee_recipient_pk * (1 - mode) == 0);
+    assert(in_amounts[1] * (1 - mode) * (1 - use_second_input) == 0);
+    assert(in_blindings[1] * (1 - mode) * (1 - use_second_input) == 0);
+    assert(out_recipient_pks[1] * (1 - mode) + mode != 0);
 
     // mode=1 unshield: second input/output lane and fee lane are zeroed.
     assert(in_amounts[1] * mode == 0);
     assert(in_blindings[1] * mode == 0);
     assert(nullifiers[1] * mode == 0);
-    assert(out_amounts[0] * mode == 0);
     assert(out_amounts[1] * mode == 0);
-    assert(out_recipient_pks[0] * mode == 0);
     assert(out_recipient_pks[1] * mode == 0);
-    assert(out_blindings[0] * mode == 0);
     assert(out_blindings[1] * mode == 0);
-    assert(out_commitments[0] * mode == 0);
     assert(out_commitments[1] * mode == 0);
     assert(fee * mode == 0);
     assert(fee_recipient_pk * mode == 0);
 
-    // mode=1 unshield: exact-note withdrawal from input #0.
-    assert((in_amounts[0] - unshield_amount) * mode == 0);
+    // mode=1 unshield: partial/full withdrawal with private change output in lane #0.
+    assert((in_amounts[0] - (unshield_amount + out_amounts[0])) * mode == 0);
     assert((token - unshield_token_address) * mode == 0);
     assert(unshield_recipient * mode + (1 - mode) != 0);
 }

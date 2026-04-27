@@ -6,6 +6,7 @@ import {deriveOwnerPk, deriveUserKeys, keySeedFromPrivateKey, viewingPrivToPub} 
 import {executePrivateTransfer, executeUnshield} from "./privateTransfer";
 import {scanShieldedNotes} from "./shielded";
 import type {DecryptedNote} from "./shielded";
+import {decodeShieldedAddress, encodeShieldedAddress} from "./shieldedAddress";
 import {clearVault, readVaultMeta, storePrivateKey, unlockPrivateKey} from "./storage";
 
 type ImportedToken = {
@@ -264,6 +265,8 @@ export default function App() {
   const [sendMode, setSendMode] = useState<"public" | "private">("public");
   const [recipientOwnerPk, setRecipientOwnerPk] = useState("");
   const [recipientViewingPub, setRecipientViewingPub] = useState("");
+  const [recipientShieldedAddress, setRecipientShieldedAddress] = useState("");
+  const [advancedRecipientMode, setAdvancedRecipientMode] = useState(false);
   const [relayerUrl, setRelayerUrl] = useState("http://127.0.0.1:8787");
   const actionRunId = useRef(0);
   const isActionRunning = (label: string) => activeAction === label;
@@ -588,22 +591,30 @@ export default function App() {
       await runAction("Submitting private transfer", async () => {
         if (!sendAmount || Number(sendAmount) <= 0) throw new Error("Enter a valid private transfer amount");
         setStatus("Submitting private transfer: discovering notes and preparing proof inputs...");
-        const {owner: sender, feeRecipient} = deriveShieldKeyMaterial(wallet);
+        const {owner: sender} = deriveShieldKeyMaterial(wallet);
         const poseidon = new ethers.Contract(CONTRACTS.poseidon, POSEIDON_ABI, provider);
         const senderOwnerPk = await deriveOwnerPk(sender.spendingKey, poseidon);
         if (!senderOwnerPk) throw new Error("Failed to derive sender owner pk");
         const senderViewingPub = viewingPrivToPub(sender.viewingPriv);
         const senderCache = readScanCache(senderViewingPub);
         const requestedAmount = ethers.parseUnits(sendAmount, tokenDecimals);
+        const recipientKeys = advancedRecipientMode
+          ? {
+              ownerPk: BigInt(recipientOwnerPk),
+              viewingPub: recipientViewingPub as `0x${string}`,
+            }
+          : decodeShieldedAddress(recipientShieldedAddress.trim());
+        if ("chainId" in recipientKeys && recipientKeys.chainId !== SEPOLIA.chainId) {
+          throw new Error(`Shielded address chainId ${recipientKeys.chainId} does not match Sepolia (${SEPOLIA.chainId}).`);
+        }
         const result = await executePrivateTransfer({
           relayerUrl,
           senderSpendingKey: sender.spendingKey,
+          senderOwnerPk,
           senderViewingPriv: sender.viewingPriv,
           senderViewingPub,
-          recipientOwnerPk: BigInt(recipientOwnerPk),
-          recipientViewingPub: recipientViewingPub as `0x${string}`,
-          feeRecipientOwnerPk: await deriveOwnerPk(feeRecipient.spendingKey, poseidon),
-          feeRecipientViewingPub: viewingPrivToPub(feeRecipient.viewingPriv),
+          recipientOwnerPk: recipientKeys.ownerPk,
+          recipientViewingPub: recipientKeys.viewingPub,
           relayerRequestTimeoutMs: 120000,
           onStatus: (msg) => setStatus(`Submitting private transfer: ${msg}`),
           scanFromBlock: senderCache ? Math.max(POOL_DEPLOY_BLOCK, senderCache.lastScannedBlock + 1) : POOL_DEPLOY_BLOCK,
@@ -644,6 +655,8 @@ export default function App() {
           : (ethers.getAddress(unshieldRecipient.trim()) as `0x${string}`);
       const amount = ethers.parseUnits(unshieldAmount, tokenDecimals);
       const {owner} = deriveShieldKeyMaterial(wallet);
+      const poseidon = new ethers.Contract(CONTRACTS.poseidon, POSEIDON_ABI, provider);
+      const senderOwnerPk = await deriveOwnerPk(owner.spendingKey, poseidon);
       const senderViewingPub = viewingPrivToPub(owner.viewingPriv);
       const senderCache = readScanCache(senderViewingPub);
       setStatus("Submitting unshield: scanning notes and preparing proof...");
@@ -652,6 +665,7 @@ export default function App() {
         senderSpendingKey: owner.spendingKey,
         senderViewingPriv: owner.viewingPriv,
         senderViewingPub,
+        senderOwnerPk,
         recipientAddress: recipient,
         amount,
         onStatus: (msg) => setStatus(`Submitting unshield: ${msg}`),
@@ -794,6 +808,16 @@ export default function App() {
                     <span>{wallet?.privateKey}</span>
                   </p>
                   <p className="key-item">
+                    <strong>shielded_address</strong>
+                    <span>
+                      {encodeShieldedAddress({
+                        ownerPk: BigInt(derivedKeys.ownerPk),
+                        viewingPub: derivedKeys.viewingPub as `0x${string}`,
+                        chainId: SEPOLIA.chainId,
+                      })}
+                    </span>
+                  </p>
+                  <p className="key-item">
                     <strong>owner_pk</strong>
                     <span>{derivedKeys.ownerPk}</span>
                   </p>
@@ -934,18 +958,36 @@ export default function App() {
               <input value={sendAmount} onChange={(e) => setSendAmount(e.target.value)} />
               {sendMode === "private" && (
                 <>
-                  <label>Recipient owner_pk</label>
+                  <label>Recipient shielded address</label>
                   <input
-                    value={recipientOwnerPk}
-                    onChange={(e) => setRecipientOwnerPk(e.target.value)}
-                    placeholder="decimal bigint"
+                    value={recipientShieldedAddress}
+                    onChange={(e) => setRecipientShieldedAddress(e.target.value)}
+                    placeholder="shd_..."
                   />
-                  <label>Recipient viewing public key</label>
-                  <input
-                    value={recipientViewingPub}
-                    onChange={(e) => setRecipientViewingPub(e.target.value)}
-                    placeholder="0x02..."
-                  />
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={advancedRecipientMode}
+                      onChange={(e) => setAdvancedRecipientMode(e.target.checked)}
+                    />
+                    Use advanced manual recipient keys
+                  </label>
+                  {advancedRecipientMode && (
+                    <>
+                      <label>Recipient owner_pk</label>
+                      <input
+                        value={recipientOwnerPk}
+                        onChange={(e) => setRecipientOwnerPk(e.target.value)}
+                        placeholder="decimal bigint"
+                      />
+                      <label>Recipient viewing public key</label>
+                      <input
+                        value={recipientViewingPub}
+                        onChange={(e) => setRecipientViewingPub(e.target.value)}
+                        placeholder="0x02..."
+                      />
+                    </>
+                  )}
                   <label>Relayer URL</label>
                   <input value={relayerUrl} onChange={(e) => setRelayerUrl(e.target.value)} />
                 </>

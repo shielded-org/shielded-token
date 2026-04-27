@@ -183,6 +183,7 @@ function parseHexToBigInt(hex) {
 function toHex32(v) {
   return ethers.zeroPadValue(ethers.toBeHex(v), 32);
 }
+const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
 
 function normalizeSeedToBytes32(seedInput) {
   if (ethers.isHexString(seedInput, 32)) return seedInput;
@@ -477,8 +478,8 @@ function readProofHex() {
   return `0x${proofWithoutPublicInputs.toString("hex")}`;
 }
 
-function computeTransferFee(amount) {
-  return (amount * 5n) / 1000n; // 0.5%
+function computeTransferFee(_amount) {
+  return 0n;
 }
 
 async function executeTransferStep({
@@ -564,7 +565,7 @@ async function executeTransferStep({
     nullifiers: [nullifier0, nullifier1],
     out_commitments: [outCommitment0, outCommitment1],
     fee: fee.toString(),
-    fee_recipient_pk: feeRecipientPk,
+    fee_recipient_pk: ZERO_BYTES32,
     mode: "0",
     unshield_recipient: "0x0000000000000000000000000000000000000000000000000000000000000000",
     unshield_amount: "0",
@@ -592,7 +593,7 @@ async function executeTransferStep({
     merkleRoot: rootOnChain,
     token: tokenField,
     fee: fee.toString(),
-    feeRecipientPk,
+    feeRecipientPk: ZERO_BYTES32,
     gasLimit: Number(process.env.SHIELDED_TRANSFER_GAS_LIMIT || 16_000_000),
   });
   const confirmedStatus = await waitForRelayerConfirmation(relayerResult.requestId);

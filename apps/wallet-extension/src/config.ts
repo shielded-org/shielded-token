@@ -5,21 +5,21 @@ export const SEPOLIA = {
 };
 
 export const CONTRACTS = {
-  poseidon: "0x9326A6EF88A986286D4B557A9951602182a397Ba",
-  poseidonHasher: "0x81E5BDC2167BAD2675792D5B87ec6D70f4bdc268",
-  verifier: "0x8Fde56DB65E28853d3e8eecB1033ccAdB34540E7",
-  merkleTree: "0x73C03CB432823F3c0B70a8d5a097738260Fb7aae",
-  pool: "0x23228B4c59CA11597346802D6625C834D44c4922",
-  token: "0x2F3dAD877Fc7394c08Be9e323B0CBc6D5BEcFA4A",
+  poseidon: "0xa9CC305Af95542673aea1518881B6F1E7A8DE3b8",
+  poseidonHasher: "0xE6d12EfF9db5FDb548Aa17Ad1587623FFAe3BE96",
+  verifier: "0xf45A783A47c68570b9D786a291e934F6A6B70950",
+  merkleTree: "0x3C4A041C4145B7FEF8C341Ca10D162A717adcc7A",
+  pool: "0xDd10f44Bc04451f0e1B698F5a8422f56d0d05966",
+  token: "0x9DBEd8AB4A05b5E4b6aF3bf61AA3051F6caa91b4",
 };
 
-export const POOL_DEPLOY_BLOCK = 10743513;
+export const POOL_DEPLOY_BLOCK = 10744004;
 
 export const POOL_ABI = [
   "event RoutedCommitment(bytes32 indexed channel, bytes32 indexed subchannel, bytes encryptedNote)",
   "function nullifierSet(bytes32) view returns (bool)",
   "function shieldRouted(address token, uint256 amount, bytes32 commitment, bytes encryptedNote, bytes32 channel, bytes32 subchannel) external",
-  "function unshield(bytes proof, bytes32 nullifier, address token, address recipient, uint256 amount, bytes32 merkleRoot) external",
+  "function unshield(bytes proof, bytes32 nullifier, address token, address recipient, uint256 amount, bytes32 merkleRoot, bytes32 newCommitment, bytes encryptedNote, bytes32 channel, bytes32 subchannel) external",
 ];
 
 export const MERKLE_ABI = [

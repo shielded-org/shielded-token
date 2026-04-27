@@ -29,7 +29,7 @@ const DEPLOYER_KEY =
 const POOL_ABI = [
   "function shieldRouted(address token, uint256 amount, bytes32 commitment, bytes encryptedNote, bytes32 channel, bytes32 subchannel) external",
   "function shieldedTransferRouted(bytes proof, bytes32[2] nullifiers, bytes32[2] newCommitments, bytes[2] encryptedNotes, bytes32[2] channels, bytes32[2] subchannels, bytes32 merkleRoot, bytes32 token, uint256 fee, bytes32 feeRecipientPk) external",
-  "function unshield(bytes proof, bytes32 nullifier, address token, address recipient, uint256 amount, bytes32 merkleRoot) external",
+  "function unshield(bytes proof, bytes32 nullifier, address token, address recipient, uint256 amount, bytes32 merkleRoot, bytes32 newCommitment, bytes encryptedNote, bytes32 channel, bytes32 subchannel) external",
   "function nullifierSet(bytes32) external view returns (bool)",
   "event RoutedCommitment(bytes32 indexed channel, bytes32 indexed subchannel, bytes encryptedNote)",
 ];
@@ -118,6 +118,7 @@ function parseHexToBigInt(hex) {
 function toHex32(v) {
   return ethers.zeroPadValue(ethers.toBeHex(v), 32);
 }
+const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
 
 function normalizeSeedToBytes32(seedInput) {
   if (ethers.isHexString(seedInput, 32)) return seedInput;
@@ -378,8 +379,8 @@ function readProofHex() {
   return `0x${proofWithoutPublicInputs.toString("hex")}`;
 }
 
-function computeTransferFee(amount) {
-  return (amount * 5n) / 1000n; // 0.5%
+function computeTransferFee(_amount) {
+  return 0n;
 }
 
 async function executeTransferStep({
@@ -458,7 +459,7 @@ async function executeTransferStep({
     nullifiers: [nullifier0, nullifier1],
     out_commitments: [outCommitment0, outCommitment1],
     fee: fee.toString(),
-    fee_recipient_pk: feeRecipientPk,
+    fee_recipient_pk: ZERO_BYTES32,
     mode: "0",
     unshield_recipient: "0x0000000000000000000000000000000000000000000000000000000000000000",
     unshield_amount: "0",
@@ -481,7 +482,7 @@ async function executeTransferStep({
     merkleRoot: rootOnChain,
     token: tokenField,
     fee: fee.toString(),
-    feeRecipientPk,
+    feeRecipientPk: ZERO_BYTES32,
     gasLimit: Number(process.env.SHIELDED_TRANSFER_GAS_LIMIT || 16_000_000),
   });
   const confirmedStatus = await waitForRelayerConfirmation(relayerResult.requestId);
