@@ -29,7 +29,7 @@ const DEPLOYER_KEY =
 /// Monolithic ShieldedToken: ERC20 + embedded pool (STRK20-style coordinator).
 const SHIELDED_TOKEN_ABI = [
   "function shieldRouted(uint256 amount, bytes32 commitment, bytes encryptedNote, bytes32 channel, bytes32 subchannel) external",
-  "function shieldedTransferRouted(bytes proof, bytes32[2] nullifiers, bytes32[2] newCommitments, bytes[2] encryptedNotes, bytes32[2] channels, bytes32[2] subchannels, bytes32 merkleRoot, bytes32 token, uint64 fee) external",
+  "function shieldedTransferRouted(bytes proof, bytes32[2] nullifiers, bytes32[2] newCommitments, bytes[2] encryptedNotes, bytes32[2] channels, bytes32[2] subchannels, bytes32 merkleRoot, bytes32 token, uint256 fee, bytes32 feeRecipientPk) external",
   "function tokenField() external view returns (bytes32)",
   "function nullifierSet(bytes32) external view returns (bool)",
   "event RoutedCommitment(bytes32 indexed channel, bytes32 indexed subchannel, bytes encryptedNote)",
@@ -41,12 +41,18 @@ const MERKLE_ABI = [
   "function isKnownRoot(bytes32 root) external view returns (bool)",
   "function getNextIndex() external view returns (uint256)",
 ];
+const MERKLE_EVENTS_ABI = [
+  "event LeafInserted(uint256 indexed index, bytes32 indexed leaf, bytes32 indexed newRoot)",
+];
 
 const HASHER_ABI = ["function hash2(bytes32 left, bytes32 right) external view returns (bytes32)"];
 const POSEIDON_ABI = [
   "function hash_2(uint256 x, uint256 y) external pure returns (uint256)",
   "function hash(uint256[] input) external pure returns (uint256)",
 ];
+const KEY_DERIVATION_SEED = process.env.KEY_DERIVATION_SEED || "zkproject-deterministic-seed-v1";
+const BN254_FIELD_MODULUS = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+const SECP256K1_GROUP_ORDER = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141n;
 
 function loadForgeArtifact(relPath) {
   const p = path.join(contractsDir, "out", relPath);
@@ -102,6 +108,31 @@ function parseHexToBigInt(hex) {
 
 function toHex32(v) {
   return ethers.zeroPadValue(ethers.toBeHex(v), 32);
+}
+const ZERO_BYTES32 = "0x0000000000000000000000000000000000000000000000000000000000000000";
+
+function normalizeSeedToBytes32(seedInput) {
+  if (ethers.isHexString(seedInput, 32)) return seedInput;
+  if (ethers.isHexString(seedInput)) return ethers.zeroPadValue(seedInput, 32);
+  return ethers.keccak256(ethers.toUtf8Bytes(seedInput));
+}
+
+function deriveDeterministicScalar(seedBytes32, label, modulus) {
+  const digest = ethers.solidityPackedKeccak256(["string", "bytes32", "string"], ["zkproject-key-v1", seedBytes32, label]);
+  return (BigInt(digest) % (modulus - 1n)) + 1n;
+}
+
+function buildDeterministicUsers(seedBytes32) {
+  const names = ["owner", "userB", "userC", "userD", "userG", "userH", "userK", "feeRecipient"];
+  const users = {};
+  for (const name of names) {
+    users[name] = {
+      name: name === "feeRecipient" ? "FeeRecipient" : name === "owner" ? "Owner" : name.replace("user", "User"),
+      spendingKey: deriveDeterministicScalar(seedBytes32, `${name}:spending`, BN254_FIELD_MODULUS),
+      viewingPriv: deriveDeterministicScalar(seedBytes32, `${name}:viewing`, SECP256K1_GROUP_ORDER),
+    };
+  }
+  return users;
 }
 
 function hexToBytes(hex) {
@@ -299,6 +330,28 @@ async function buildLevelMaps(poseidon, leaves, depth = 20) {
   return {levels, zeroes};
 }
 
+async function loadAllLeavesFromTree(provider, treeAddress, fromBlock) {
+  const iface = new ethers.Interface(MERKLE_EVENTS_ABI);
+  const topic = iface.getEvent("LeafInserted").topicHash;
+  const logs = await provider.getLogs({
+    address: treeAddress,
+    fromBlock,
+    toBlock: "latest",
+    topics: [topic],
+  });
+  const leaves = [];
+  for (const log of logs) {
+    const parsed = iface.parseLog(log);
+    if (!parsed) continue;
+    leaves[Number(parsed.args.index)] = parsed.args.leaf;
+  }
+  return leaves.filter(Boolean);
+}
+
+function findLeafIndex(allLeaves, commitment) {
+  return allLeaves.findIndex((leaf) => leaf.toLowerCase() === commitment.toLowerCase());
+}
+
 function extractPath(levelMaps, zeroes, targetIndex, depth = 20) {
   const siblings = [];
   const directions = [];
@@ -341,6 +394,11 @@ merkle_root = "${payload.merkle_root}"
 nullifiers = ["${payload.nullifiers[0]}", "${payload.nullifiers[1]}"]
 out_commitments = ["${payload.out_commitments[0]}", "${payload.out_commitments[1]}"]
 fee = "${payload.fee}"
+fee_recipient_pk = "${payload.fee_recipient_pk}"
+mode = "${payload.mode ?? "0"}"
+unshield_recipient = "${payload.unshield_recipient ?? "0x0000000000000000000000000000000000000000000000000000000000000000"}"
+unshield_amount = "${payload.unshield_amount ?? "0"}"
+unshield_token_address = "${payload.unshield_token_address ?? "0x0000000000000000000000000000000000000000000000000000000000000000"}"
 `.trimStart();
 
   writeFileSync(path.join(circuitsDir, "Prover.toml"), toml, "utf8");
@@ -348,8 +406,12 @@ fee = "${payload.fee}"
 
 function readProofHex() {
   const proofWithPublicInputs = readFileSync(path.join(circuitsDir, "target", "proof"));
-  const proofWithoutPublicInputs = proofWithPublicInputs.subarray(7 * 32);
+  const proofWithoutPublicInputs = proofWithPublicInputs.subarray(12 * 32);
   return `0x${proofWithoutPublicInputs.toString("hex")}`;
+}
+
+function computeTransferFee(_amount) {
+  return 0n;
 }
 
 async function executeTransferStep({
@@ -371,6 +433,8 @@ async function executeTransferStep({
   routedChannels,
   routedSubchannels,
   fee,
+  feeRecipientPk,
+  tokenDeployBlock,
 }) {
   if (inNotes.length !== 2) throw new Error(`${stepName}: expected exactly two input notes`);
 
@@ -404,7 +468,11 @@ async function executeTransferStep({
   const rootOnChain = await treeRW.getLastRoot();
   if (!(await treeRW.isKnownRoot(rootOnChain))) throw new Error(`${stepName}: root is unknown`);
 
-  const allLeaves = [...inNotes[0].allLeavesSnapshot];
+  const allLeaves = await loadAllLeavesFromTree(
+    treeRW.runner.provider,
+    await treeRW.getAddress(),
+    tokenDeployBlock
+  );
   const {levels, zeroes} = await buildLevelMaps(poseidonRW, allLeaves, 20);
   const path0 = extractPath(levels, zeroes, inNotes[0].index, 20);
   const path1 = extractPath(levels, zeroes, inNotes[1].index, 20);
@@ -429,6 +497,11 @@ async function executeTransferStep({
     nullifiers: [nullifier0, nullifier1],
     out_commitments: [outCommitment0, outCommitment1],
     fee: fee.toString(),
+    fee_recipient_pk: ZERO_BYTES32,
+    mode: "0",
+    unshield_recipient: "0x0000000000000000000000000000000000000000000000000000000000000000",
+    unshield_amount: "0",
+    unshield_token_address: "0x0000000000000000000000000000000000000000000000000000000000000000",
   });
 
   console.log(`== ${stepName}: generating proof ==`);
@@ -451,7 +524,8 @@ async function executeTransferStep({
     subchannels: routedSubchannels,
     merkleRoot: rootOnChain,
     token: tokenField,
-    fee: Number(fee),
+    fee: fee.toString(),
+    feeRecipientPk: ZERO_BYTES32,
     gasLimit: Number(process.env.SHIELDED_TRANSFER_GAS_LIMIT || 16_000_000),
   });
   const confirmedStatus = await waitForRelayerConfirmation(relayerResult.requestId);
@@ -561,30 +635,21 @@ async function main() {
   const treeRW = new ethers.Contract(await tree.getAddress(), MERKLE_ABI, signer);
 
   const tokenField = await tokenRW.tokenField();
-  const users = {
-    owner: {name: "Owner", spendingKey: 123456789n, viewingPriv: 11111111n},
-    userB: {name: "UserB", spendingKey: 777777n, viewingPriv: 22222222n},
-    userC: {name: "UserC", spendingKey: 888888n, viewingPriv: 33333333n},
-    userD: {name: "UserD", spendingKey: 999999n, viewingPriv: 44444444n},
-    userG: {name: "UserG", spendingKey: 555555n, viewingPriv: 66666666n},
-    userH: {name: "UserH", spendingKey: 666666n, viewingPriv: 77777777n},
-    userK: {name: "UserK", spendingKey: 444444n, viewingPriv: 88888888n},
-  };
+  const users = buildDeterministicUsers(normalizeSeedToBytes32(KEY_DERIVATION_SEED));
   for (const user of Object.values(users)) {
     user.ownerPk = parseHexToBigInt(await poseidonHash2(poseidonRW, user.spendingKey, 1n));
     user.viewingPub = viewingPrivToPub(user.viewingPriv);
     user.routeCursor = 0;
   }
-  const fee = 0n;
-
+  const feeRecipientPk = toHex32(users.feeRecipient.ownerPk);
   console.log("== Shielding six owner notes (burn public balance, insert commitments) ==");
   const initialNotesSpec = [
-    {amount: 20n, blinding: 1111n},
-    {amount: 20n, blinding: 2222n},
-    {amount: 20n, blinding: 3333n},
-    {amount: 20n, blinding: 4444n},
-    {amount: 20n, blinding: 5555n},
-    {amount: 20n, blinding: 6666n},
+    {amount: 120n, blinding: 1111n},
+    {amount: 120n, blinding: 2222n},
+    {amount: 120n, blinding: 3333n},
+    {amount: 120n, blinding: 4444n},
+    {amount: 120n, blinding: 5555n},
+    {amount: 120n, blinding: 6666n},
   ];
   const allLeaves = [];
   const notesByOwnerPk = new Map();
@@ -613,8 +678,10 @@ async function main() {
     );
     const route = routeForRecipient(users.owner.viewingPub, users.owner.routeCursor++);
     await (await tokenRW.shieldRouted(spec.amount, commitment, encryptedDepositNote, route.channel, route.subchannel)).wait();
-    const index = allLeaves.length;
-    allLeaves.push(commitment);
+    const leavesAfter = await loadAllLeavesFromTree(provider, await tree.getAddress(), tokenDeployBlock);
+    const index = findLeafIndex(leavesAfter, commitment);
+    if (index < 0) throw new Error(`Could not resolve inserted leaf index for shielded note #${i + 1}`);
+    allLeaves.splice(0, allLeaves.length, ...leavesAfter);
     pushNote({index, commitment, amount: spec.amount, blinding: spec.blinding, ownerPk: users.owner.ownerPk});
     console.log(`Shielded note #${i + 1}: inserted`);
   }
@@ -625,17 +692,17 @@ async function main() {
     {
       name: "Transfer 1 (Owner -> UserB)",
       recipient: users.userB,
-      recipientAmounts: [35n, 5n],
+      recipientAmounts: [120n, 120n],
     },
     {
       name: "Transfer 2 (Owner -> UserC)",
       recipient: users.userC,
-      recipientAmounts: [33n, 7n],
+      recipientAmounts: [120n, 120n],
     },
     {
       name: "Transfer 3 (Owner -> UserD)",
       recipient: users.userD,
-      recipientAmounts: [34n, 6n],
+      recipientAmounts: [120n, 120n],
     },
   ];
 
@@ -645,6 +712,7 @@ async function main() {
     in0.allLeavesSnapshot = [...allLeaves];
     in1.allLeavesSnapshot = [...allLeaves];
 
+    const transferFee = computeTransferFee(plan.recipientAmounts[0]);
     const outBlindings = [BigInt(7000 + results.length * 10 + 1), BigInt(7000 + results.length * 10 + 2)];
     const route0 = routeForRecipient(plan.recipient.viewingPub, plan.recipient.routeCursor++);
     const route1 = routeForRecipient(plan.recipient.viewingPub, plan.recipient.routeCursor++);
@@ -666,12 +734,16 @@ async function main() {
       outBlindings,
       routedChannels: [route0.channel, route1.channel],
       routedSubchannels: [route0.subchannel, route1.subchannel],
-      fee,
+      fee: transferFee,
+      feeRecipientPk,
+      tokenDeployBlock,
     });
 
     for (const created of stepResult.created) {
-      const index = allLeaves.length;
-      allLeaves.push(created.commitment);
+      const leavesAfter = await loadAllLeavesFromTree(provider, await tree.getAddress(), tokenDeployBlock);
+      const index = findLeafIndex(leavesAfter, created.commitment);
+      if (index < 0) throw new Error(`Could not resolve inserted leaf index for ${plan.name}`);
+      allLeaves.splice(0, allLeaves.length, ...leavesAfter);
       pushNote({
         index,
         commitment: created.commitment,
@@ -684,9 +756,9 @@ async function main() {
   }
 
   const recipientSpendPlan = [
-    {sender: users.userB, recipient: users.userG, sendAmount: 10n},
-    {sender: users.userC, recipient: users.userK, sendAmount: 15n},
-    {sender: users.userD, recipient: users.userK, sendAmount: 12n},
+    {sender: users.userB, recipient: users.userG, sendAmount: 239n},
+    {sender: users.userC, recipient: users.userK, sendAmount: 239n},
+    {sender: users.userD, recipient: users.userK, sendAmount: 239n},
   ];
 
   for (let i = 0; i < recipientSpendPlan.length; i += 1) {
@@ -694,12 +766,23 @@ async function main() {
     const [in0, in1] = popTwoNotes(plan.sender.ownerPk);
     in0.allLeavesSnapshot = [...allLeaves];
     in1.allLeavesSnapshot = [...allLeaves];
+    const transferFee = computeTransferFee(plan.sendAmount);
     const totalIn = in0.amount + in1.amount;
-    const changeAmount = totalIn - plan.sendAmount - fee;
-    if (changeAmount < 0n) throw new Error(`${plan.sender.name}: insufficient balance for planned spend`);
+    const paysFeeAsSecondOutput = transferFee > 0n;
+    const changeAmount = paysFeeAsSecondOutput ? transferFee : totalIn - plan.sendAmount - transferFee;
+    const changePk = paysFeeAsSecondOutput ? users.feeRecipient.ownerPk : plan.sender.ownerPk;
+    const changeViewingPub = paysFeeAsSecondOutput ? users.feeRecipient.viewingPub : plan.sender.viewingPub;
+    if (paysFeeAsSecondOutput && totalIn !== plan.sendAmount + transferFee) {
+      throw new Error(`${plan.sender.name}: inputs must equal sendAmount + fee when fee output note is required`);
+    }
+    if (!paysFeeAsSecondOutput && changeAmount < 0n) {
+      throw new Error(`${plan.sender.name}: insufficient balance for planned spend`);
+    }
     const outBlindings = [BigInt(9000 + i * 10 + 1), BigInt(9000 + i * 10 + 2)];
     const route0 = routeForRecipient(plan.recipient.viewingPub, plan.recipient.routeCursor++);
-    const route1 = routeForRecipient(plan.sender.viewingPub, plan.sender.routeCursor++);
+    const route1 = paysFeeAsSecondOutput
+      ? routeForRecipient(users.feeRecipient.viewingPub, users.feeRecipient.routeCursor++)
+      : routeForRecipient(plan.sender.viewingPub, plan.sender.routeCursor++);
     const stepResult = await executeTransferStep({
       stepName: `Transfer ${4 + i} (${plan.sender.name} -> ${plan.recipient.name})`,
       poseidonRW,
@@ -712,18 +795,22 @@ async function main() {
       recipientPk: plan.recipient.ownerPk,
       recipientViewingPub: plan.recipient.viewingPub,
       recipientAmount: plan.sendAmount,
-      changePk: plan.sender.ownerPk,
-      changeViewingPub: plan.sender.viewingPub,
+      changePk,
+      changeViewingPub,
       changeAmount,
       outBlindings,
       routedChannels: [route0.channel, route1.channel],
       routedSubchannels: [route0.subchannel, route1.subchannel],
-      fee,
+      fee: transferFee,
+      feeRecipientPk,
+      tokenDeployBlock,
     });
 
     for (const created of stepResult.created) {
-      const index = allLeaves.length;
-      allLeaves.push(created.commitment);
+      const leavesAfter = await loadAllLeavesFromTree(provider, await tree.getAddress(), tokenDeployBlock);
+      const index = findLeafIndex(leavesAfter, created.commitment);
+      if (index < 0) throw new Error(`Could not resolve inserted leaf index for Transfer ${4 + i}`);
+      allLeaves.splice(0, allLeaves.length, ...leavesAfter);
       pushNote({
         index,
         commitment: created.commitment,
@@ -744,7 +831,7 @@ async function main() {
   });
 
   console.log("\n== Recipient scan/decrypt using viewing keys ==");
-  for (const key of ["owner", "userB", "userC", "userD", "userG", "userH", "userK"]) {
+  for (const key of ["owner", "userB", "userC", "userD", "userG", "userH", "userK", "feeRecipient"]) {
     const viewer = users[key];
     const discovered = await scanAndDecryptNotes({
       provider,

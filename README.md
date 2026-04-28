@@ -76,7 +76,7 @@ Single contract combining:
 Standalone privacy pool for existing ERC20s:
 
 - **Token-aware shielding**: `shieldRouted(token, amount, commitment, encryptedNote, channel, subchannel)`
-- **Token-bound transfer verification**: `shieldedTransferRouted(..., tokenField, fee)` where `tokenField` must map to an enabled ERC20
+- **Token-bound transfer verification**: `shieldedTransferRouted(..., tokenField, fee, feeRecipientPk)` where `tokenField` must map to an enabled ERC20
 - **Unshield to EOA**: `unshield(...)` transfers underlying ERC20 from pool custody to recipient
 - **Safety controls**: token allowlist (`enabledToken`), nullifier replay protection, root checks, and non-reentrancy
 - **Same routed discovery surface**: emits `RoutedCommitment(channel, subchannel, encryptedNote)` like monolith mode
@@ -104,7 +104,8 @@ The Noir circuit enforces:
 - Merkle membership for each input note
 - Nullifier correctness (`Poseidon(spending_key, commitment)`)
 - Output commitment correctness
-- Conservation rule: sum(inputs) = sum(outputs) + fee
+- Conservation rule: sum(inputs) = sum(outputs)
+- If `fee > 0`, output note #2 is enforced as fee note (`owner = feeRecipientPk`, `amount = fee`)
 - Distinct nullifiers inside a transfer
 
 Public inputs include:
@@ -114,6 +115,7 @@ Public inputs include:
 - nullifiers
 - output commitments
 - fee
+- fee recipient pk
 
 Private witness includes secrets (spending key, paths, note amounts/blindings, etc.).
 
@@ -171,7 +173,8 @@ Use `services/relayer/.env` (already configured for local Anvil defaults):
 
 - `RELAYER_PORT=8787`
 - `RELAYER_RPC_URL=http://127.0.0.1:8545`
-- `RELAYER_SIGNER_PRIVATE_KEY=...`
+- `RELAYER_SIGNER_PRIVATE_KEYS=0xkey1,0xkey2,0xkey3` (preferred, round-robin)
+- `RELAYER_SIGNER_PRIVATE_KEY=...` (legacy fallback)
 - `RELAYER_URL=http://127.0.0.1:8787`
 
 Run:
@@ -199,7 +202,7 @@ This script does all of the following:
 
 ### 5b) Sepolia testnet E2E
 
-Fund the deployer account with Sepolia ETH. Point the relayer at the same RPC and chain (`services/relayer` `RELAYER_RPC_URL`, `RELAYER_SIGNER_PRIVATE_KEY` funded on Sepolia). Copy `.env.sepolia.example` to `.env.sepolia`, set `PRIVATE_KEY`, then:
+Fund the deployer account with Sepolia ETH. Point the relayer at the same RPC and chain (`services/relayer` `RELAYER_RPC_URL`, and one or more funded keys via `RELAYER_SIGNER_PRIVATE_KEYS` or `RELAYER_SIGNER_PRIVATE_KEY`). Copy `.env.sepolia.example` to `.env.sepolia`, set `PRIVATE_KEY`, then:
 
 ```bash
 node --env-file=.env.sepolia scripts/sepolia-e2e.mjs
@@ -207,7 +210,7 @@ node --env-file=.env.sepolia scripts/sepolia-e2e.mjs
 
 (`npm run e2e:sepolia` runs the same script; export vars or use a shell wrapper if you do not use `--env-file`.)
 
-Required env: `TESTNET_RPC_URL`, `PRIVATE_KEY` (deployer, `0x` optional), and relayer reachable at `RELAYER_URL`.
+Required env: `TESTNET_RPC_URL`, `PRIVATE_KEY` (deployer, `0x` optional), `FEE_RECIPIENT_PK` (per-transfer fee note owner), and relayer reachable at `RELAYER_URL`.
 
 - **First run (deploy):** omit `SKIP_DEPLOY` / `TRANSFERS_ONLY`. Writes `scripts/sepolia-deployment.json` (gitignored) and `scripts/sepolia-e2e-state.json` after shields (before transfers).
 - **Reuse deployment, empty Merkle tree:** `SKIP_DEPLOY=1` with addresses in env or the deployment JSON; runs shields + transfers.

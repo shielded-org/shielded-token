@@ -123,17 +123,18 @@ contract ShieldedERC20Pool {
         bytes32[2] calldata subchannels,
         bytes32 merkleRoot,
         bytes32 token,
-        uint64 fee
+        uint256 fee,
+        bytes32 feeRecipientPk
     ) external {
         address tokenAddress = _tokenFieldToAddress(token);
         if (!enabledToken[tokenAddress]) revert TokenNotEnabled(tokenAddress);
         if (proof.length == 0) revert InvalidProof();
-        if (nullifiers[0] == bytes32(0) || nullifiers[1] == bytes32(0)) revert InvalidNullifier();
-        if (nullifiers[0] == nullifiers[1]) revert DuplicateNullifiers();
+        if (nullifiers[0] == bytes32(0)) revert InvalidNullifier();
+        if (nullifiers[1] != bytes32(0) && nullifiers[0] == nullifiers[1]) revert DuplicateNullifiers();
         if (newCommitments[0] == bytes32(0) || newCommitments[1] == bytes32(0)) revert InvalidCommitment();
         if (!merkleTree.isKnownRoot(merkleRoot)) revert InvalidRoot();
 
-        bytes32[] memory publicInputs = new bytes32[](7);
+        bytes32[] memory publicInputs = new bytes32[](12);
         publicInputs[0] = token;
         publicInputs[1] = merkleRoot;
         publicInputs[2] = nullifiers[0];
@@ -141,11 +142,18 @@ contract ShieldedERC20Pool {
         publicInputs[4] = newCommitments[0];
         publicInputs[5] = newCommitments[1];
         publicInputs[6] = bytes32(uint256(fee));
+        publicInputs[7] = feeRecipientPk;
+        publicInputs[8] = bytes32(uint256(0)); // mode=transfer
+        publicInputs[9] = bytes32(0); // unshield recipient
+        publicInputs[10] = bytes32(0); // unshield amount
+        publicInputs[11] = bytes32(0); // unshield token address
 
         if (!verifier.verify(proof, publicInputs)) revert InvalidProof();
 
         _checkAndMarkNullifier(nullifiers[0]);
-        _checkAndMarkNullifier(nullifiers[1]);
+        if (nullifiers[1] != bytes32(0)) {
+            _checkAndMarkNullifier(nullifiers[1]);
+        }
 
         merkleTree.insert(newCommitments[0]);
         merkleTree.insert(newCommitments[1]);
@@ -160,7 +168,11 @@ contract ShieldedERC20Pool {
         address token,
         address recipient,
         uint256 amount,
-        bytes32 merkleRoot
+        bytes32 merkleRoot,
+        bytes32 newCommitment,
+        bytes calldata encryptedNote,
+        bytes32 channel,
+        bytes32 subchannel
     ) external nonReentrant {
         if (!enabledToken[token]) revert TokenNotEnabled(token);
         if (proof.length == 0) revert InvalidProof();
@@ -169,16 +181,29 @@ contract ShieldedERC20Pool {
         if (nullifier == bytes32(0)) revert InvalidNullifier();
         if (!merkleTree.isKnownRoot(merkleRoot)) revert InvalidRoot();
 
-        bytes32[] memory publicInputs = new bytes32[](5);
-        publicInputs[0] = nullifier;
-        publicInputs[1] = bytes32(uint256(uint160(recipient)));
-        publicInputs[2] = bytes32(amount);
-        publicInputs[3] = merkleRoot;
-        publicInputs[4] = bytes32(uint256(uint160(token)));
+        bytes32[] memory publicInputs = new bytes32[](12);
+        publicInputs[0] = bytes32(uint256(uint160(token)));
+        publicInputs[1] = merkleRoot;
+        publicInputs[2] = nullifier;
+        publicInputs[3] = bytes32(0); // nullifier lane #2 unused in unshield
+        publicInputs[4] = newCommitment; // output commitment #1 is private change note (optional)
+        publicInputs[5] = bytes32(0); // output commitment #2 unused in unshield
+        publicInputs[6] = bytes32(0); // fee unused in unshield
+        publicInputs[7] = bytes32(0); // fee recipient pk unused in unshield
+        publicInputs[8] = bytes32(uint256(1)); // mode=unshield
+        publicInputs[9] = bytes32(uint256(uint160(recipient)));
+        publicInputs[10] = bytes32(amount);
+        publicInputs[11] = bytes32(uint256(uint160(token)));
 
         if (!verifier.verify(proof, publicInputs)) revert InvalidProof();
 
         _checkAndMarkNullifier(nullifier);
+        if (newCommitment != bytes32(0)) {
+            merkleTree.insert(newCommitment);
+            if (encryptedNote.length > 0) {
+                emit RoutedCommitment(channel, subchannel, encryptedNote);
+            }
+        }
         bool ok = IERC20Minimal(token).transfer(recipient, amount);
         if (!ok) revert TokenTransferFailed();
         emit Unshield(REDACTED, address(0), 0);

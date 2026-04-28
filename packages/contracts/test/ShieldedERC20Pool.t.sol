@@ -73,6 +73,7 @@ contract ShieldedERC20PoolTest is Test {
     uint256 internal alicePk = 0xA11CE;
     address internal alice;
     address internal bob = address(0xB0B);
+    bytes32 internal constant FEE_RECIPIENT_PK = bytes32(uint256(123456));
 
     function setUp() public {
         alice = vm.addr(alicePk);
@@ -119,7 +120,7 @@ contract ShieldedERC20PoolTest is Test {
         bytes32[2] memory subchannels = [bytes32(uint256(11)), bytes32(uint256(22))];
 
         pool.shieldedTransferRouted(
-            hex"0102", nullifiers, commitments, encryptedNotes, channels, subchannels, root, tokenField, 0
+            hex"0102", nullifiers, commitments, encryptedNotes, channels, subchannels, root, tokenField, 0, FEE_RECIPIENT_PK
         );
 
         assertTrue(pool.nullifierSet(nullifiers[0]));
@@ -137,7 +138,7 @@ contract ShieldedERC20PoolTest is Test {
 
         vm.expectRevert(ShieldedERC20Pool.InvalidTokenField.selector);
         pool.shieldedTransferRouted(
-            hex"0102", nullifiers, commitments, encryptedNotes, channels, subchannels, root, invalidField, 0
+            hex"0102", nullifiers, commitments, encryptedNotes, channels, subchannels, root, invalidField, 0, FEE_RECIPIENT_PK
         );
     }
 
@@ -147,7 +148,18 @@ contract ShieldedERC20PoolTest is Test {
         bytes32 root = tree.getLastRoot();
         bytes32 nullifier = bytes32(uint256(999));
 
-        pool.unshield(hex"CAFE", nullifier, address(tokenA), bob, 70e18, root);
+        pool.unshield(
+            hex"CAFE",
+            nullifier,
+            address(tokenA),
+            bob,
+            70e18,
+            root,
+            bytes32(0),
+            new bytes(0),
+            bytes32(0),
+            bytes32(0)
+        );
 
         assertEq(tokenA.balanceOf(bob), 70e18);
         assertTrue(pool.nullifierSet(nullifier));

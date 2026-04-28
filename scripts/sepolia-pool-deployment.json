@@ -3,12 +3,12 @@
   "chainId": 11155111,
   "rpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
   "blockExplorer": "https://sepolia.etherscan.io",
-  "poseidon": "0xC1f9189d8b3B5b834CA07a5C8B1F2937fA017fCF",
-  "poseidonHasher": "0x2234e11645d9B0AD180C6506d6a8663697bcaaF7",
-  "verifier": "0xB7B506015cD4651CFb4d4300E70E519e5fDCE844",
-  "merkleTree": "0x489de5491D9b57298F7D1A9Be5321BdCdD3E64E4",
-  "pool": "0xE1441b908a66150Ee8aeD0Be05fcd680fB5AD144",
-  "token": "0x453F9C4559705Fa50953cda99AF605794f267340",
-  "poolDeployBlock": 10730070,
-  "deployedAt": "2026-04-25T14:36:03.381Z"
+  "poseidon": "0xa9CC305Af95542673aea1518881B6F1E7A8DE3b8",
+  "poseidonHasher": "0xE6d12EfF9db5FDb548Aa17Ad1587623FFAe3BE96",
+  "verifier": "0xf45A783A47c68570b9D786a291e934F6A6B70950",
+  "merkleTree": "0x3C4A041C4145B7FEF8C341Ca10D162A717adcc7A",
+  "pool": "0xDd10f44Bc04451f0e1B698F5a8422f56d0d05966",
+  "token": "0x9DBEd8AB4A05b5E4b6aF3bf61AA3051F6caa91b4",
+  "poolDeployBlock": 10744004,
+  "deployedAt": "2026-04-27T17:40:49.959Z"
 }
