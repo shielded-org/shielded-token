@@ -8,6 +8,17 @@ import {scanShieldedNotes} from "./shielded";
 import type {DecryptedNote} from "./shielded";
 import {decodeShieldedAddress, encodeShieldedAddress} from "./shieldedAddress";
 import {clearVault, readVaultMeta, storePrivateKey, unlockPrivateKey} from "./storage";
+import {Badge} from "./components/Badge";
+import {ActivityDetail} from "./components/ActivityDetail";
+import {ActivityFeed} from "./components/ActivityFeed";
+import {BottomNav} from "./components/BottomNav";
+import {Button} from "./components/Button";
+import {Card} from "./components/Card";
+import {ConfirmModal} from "./components/ConfirmModal";
+import {FilterPills} from "./components/FilterPills";
+import {Input} from "./components/Input";
+import {TopHeader} from "./components/TopHeader";
+import {Toast} from "./components/Toast";
 
 type ImportedToken = {
   address: `0x${string}`;
@@ -257,7 +268,7 @@ export default function App() {
   const [unshieldAmount, setUnshieldAmount] = useState("");
   const [unshieldToMode, setUnshieldToMode] = useState<"self" | "custom">("self");
   const [unshieldRecipient, setUnshieldRecipient] = useState("");
-  const [status, setStatus] = useState("Ready");
+  const [status, setStatus] = useState("");
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [sendTo, setSendTo] = useState("");
   const [sendAmount, setSendAmount] = useState("");
@@ -462,9 +473,8 @@ export default function App() {
       const phrase = generated.mnemonic?.phrase ?? "";
       setNewWalletPhrase(phrase);
       await storePrivateKey(next.privateKey as `0x${string}`, password, next.address as `0x${string}`);
-      setWallet(next);
-      setStatus(`Wallet created: ${fmt(next.address)}. Syncing balances...`);
-      void runAction("Refreshing balances", async () => refreshBalancesWithRetry(next), "Refresh failed", 180000);
+      setStatus(`Wallet created: ${fmt(next.address)}. Save your recovery phrase.`);
+      setOnboardingStep("recovery");
     }, "Failed to create wallet");
   }
 
@@ -517,6 +527,7 @@ export default function App() {
       persistImportedTokens(next);
       setNewTokenAddress("");
       setStatus(`Imported token ${symbol} (${addr}).`);
+      setRouteStack(["home"]);
     }, "Failed to import token");
   }
 
@@ -526,6 +537,20 @@ export default function App() {
       setStatus("Unlock or create a wallet before shielding.");
       return;
     }
+    const pendingShieldId = `pending-shield-${Date.now()}`;
+    setActivity((prev) => [
+      {
+        id: pendingShieldId,
+        icon: "🔼",
+        title: "Shielded",
+        subtitle: "From public wallet",
+        amount: `+ ${shieldAmount || "0"} ${tokenSymbol}`,
+        amountColor: "#22C55E",
+        timeLabel: "Just now",
+        status: "pending",
+      },
+      ...prev,
+    ]);
     await runAction("Shielding token", async () => {
       if (!shieldAmount || Number(shieldAmount) <= 0) throw new Error("Enter a valid amount");
       const {owner} = deriveShieldKeyMaterial(wallet);
@@ -577,6 +602,20 @@ export default function App() {
         );
         setStatus(`Shield chunk ${i + 1}/${chunks.length} submitted: ${shieldTx.hash}`);
         await shieldTx.wait();
+        if (i === chunks.length - 1) {
+          setActivity((prev) =>
+            prev.map((entry) =>
+              entry.id === pendingShieldId
+                ? {
+                    ...entry,
+                    status: "completed",
+                    amount: `+ ${ethers.formatUnits(amount, tokenDecimals)} ${tokenSymbol}`,
+                    txHash: shieldTx.hash,
+                  }
+                : entry
+            )
+          );
+        }
       }
       setShieldAmount("");
       await refreshBalancesWithRetry(wallet, 5);
@@ -588,6 +627,20 @@ export default function App() {
     e.preventDefault();
     if (!wallet) return;
     if (sendMode === "private") {
+      const pendingId = `pending-private-${Date.now()}`;
+      setActivity((prev) => [
+        {
+          id: pendingId,
+          icon: "🔒",
+          title: "Private Send",
+          subtitle: recipientShieldedAddress ? `${recipientShieldedAddress.slice(0, 16)}...` : "Advanced recipient",
+          amount: `- ${sendAmount || "0"} ${tokenSymbol}`,
+          amountColor: "#EF4444",
+          timeLabel: "Just now",
+          status: "pending",
+        },
+        ...prev,
+      ]);
       await runAction("Submitting private transfer", async () => {
         if (!sendAmount || Number(sendAmount) <= 0) throw new Error("Enter a valid private transfer amount");
         setStatus("Submitting private transfer: discovering notes and preparing proof inputs...");
@@ -625,11 +678,32 @@ export default function App() {
         if (!result.requestId) throw new Error("Relayer did not return requestId");
         setStatus(`Submitting private transfer: waiting relayer confirmation for ${result.requestId}...`);
         await waitForRelayerConfirmation(relayerUrl, result.requestId, 300000, 3000);
+        setActivity((prev) =>
+          prev.map((entry) =>
+            entry.id === pendingId
+              ? {...entry, status: "completed", txHash: result.txHash as `0x${string}` | undefined}
+              : entry
+          )
+        );
         setStatus(`Private transfer confirmed. Delivered ${ethers.formatUnits(BigInt(result.recipientAmount || "0"), tokenDecimals)} ${tokenSymbol}.`);
         await refreshBalancesWithRetry(wallet);
       }, "Private transfer failed", 300000);
       return;
     }
+    const pendingPublicId = `pending-public-${Date.now()}`;
+    setActivity((prev) => [
+      {
+        id: pendingPublicId,
+        icon: "↑",
+        title: "Public Send",
+        subtitle: `To ${fmt(sendTo || wallet.address)}`,
+        amount: `- ${sendAmount || "0"} ${sendAsset === "eth" ? "ETH" : tokenSymbol}`,
+        amountColor: "#EF4444",
+        timeLabel: "Just now",
+        status: "pending",
+      },
+      ...prev,
+    ]);
     await runAction("Submitting public transfer", async () => {
       if (sendAsset === "eth") {
         const tx = await wallet.sendTransaction({to: sendTo, value: ethers.parseEther(sendAmount || "0")});
@@ -640,6 +714,7 @@ export default function App() {
         await tx.wait();
       }
       await refreshBalancesWithRetry(wallet);
+      setActivity((prev) => prev.map((entry) => (entry.id === pendingPublicId ? {...entry, status: "completed"} : entry)));
       setStatus("Public transfer confirmed.");
     }, "Transfer failed");
   }
@@ -647,6 +722,20 @@ export default function App() {
   async function onUnshield(e: FormEvent) {
     e.preventDefault();
     if (!wallet) return;
+    const pendingUnshieldId = `pending-unshield-${Date.now()}`;
+    setActivity((prev) => [
+      {
+        id: pendingUnshieldId,
+        icon: "🔽",
+        title: "Unshielded",
+        subtitle: unshieldToMode === "self" ? `To ${fmt(wallet.address)}` : `To ${fmt(unshieldRecipient || wallet.address)}`,
+        amount: `- ${unshieldAmount || "0"} ${tokenSymbol}`,
+        amountColor: "#EF4444",
+        timeLabel: "Just now",
+        status: "pending",
+      },
+      ...prev,
+    ]);
     await runAction("Submitting unshield", async () => {
       if (!unshieldAmount || Number(unshieldAmount) <= 0) throw new Error("Enter a valid unshield amount");
       const recipient =
@@ -676,335 +765,301 @@ export default function App() {
       if (!result.requestId) throw new Error("Relayer did not return requestId");
       setStatus(`Submitting unshield: waiting relayer confirmation for ${result.requestId}...`);
       await waitForRelayerConfirmation(relayerUrl, result.requestId, 300000, 3000);
+      setActivity((prev) =>
+        prev.map((entry) =>
+          entry.id === pendingUnshieldId
+            ? {...entry, status: "completed", subtitle: `To ${fmt(recipient)}`, txHash: result.txHash as `0x${string}` | undefined}
+            : entry
+        )
+      );
       setUnshieldAmount("");
       await refreshBalancesWithRetry(wallet, 5);
       setStatus(`Unshield confirmed. Sent ${unshieldAmount} ${tokenSymbol} to ${recipient}.`);
     }, "Unshield failed", 300000);
   }
 
+  type Route = "home" | "shield" | "send" | "send-private" | "unshield" | "keys" | "token-import" | "activity" | "activity-detail" | "token-detail";
+  type ActivityFilter = "All" | "Shielded" | "Unshield" | "Send" | "Receive";
+  type ActivityEntry = {
+    id: string;
+    icon: string;
+    title: string;
+    subtitle: string;
+    amount: string;
+    amountColor: string;
+    timeLabel: string;
+    status: "completed" | "pending" | "failed";
+    txHash?: string;
+  };
+
   const vaultMeta = readVaultMeta();
+  const [routeStack, setRouteStack] = useState<Route[]>(["home"]);
+  const [direction, setDirection] = useState<"forward" | "backward">("forward");
+  const [showRevealConfirm, setShowRevealConfirm] = useState(false);
+  const [activityFilter, setActivityFilter] = useState<ActivityFilter>("All");
+  const [activity, setActivity] = useState<ActivityEntry[]>([]);
+  const [activeActivity, setActiveActivity] = useState<ActivityEntry | null>(null);
+  const [tokenDetailAddress, setTokenDetailAddress] = useState<`0x${string}` | null>(null);
+  const [onboardingStep, setOnboardingStep] = useState<"choice" | "create" | "recovery" | "import_phrase" | "import_pk" | "unlock">(
+    vaultMeta ? "unlock" : "choice"
+  );
+  const route = routeStack[routeStack.length - 1];
+
+  const pushRoute = (next: Route) => {
+    setDirection("forward");
+    setRouteStack((prev) => [...prev, next]);
+  };
+  const popRoute = () => {
+    setDirection("backward");
+    setRouteStack((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev));
+  };
+  const goTab = (tab: "home" | "shield" | "send" | "keys" | "activity") => {
+    setDirection("forward");
+    const mapped: Route = tab === "send" ? "send" : tab;
+    setRouteStack([mapped]);
+  };
+
+  const filteredActivity = activity.filter((entry) => {
+    if (activityFilter === "All") return true;
+    if (activityFilter === "Shielded") return entry.title.includes("Private") || entry.title.includes("Shield");
+    if (activityFilter === "Unshield") return entry.title.includes("Unshield");
+    if (activityFilter === "Send") return entry.title.includes("Send");
+    return entry.title.includes("Receive");
+  });
+  const totalShieldedNotes = privateBalances.reduce((acc, next) => acc + next.spendableNotes, 0);
+  const selectedShieldedToken = tokenDetailAddress
+    ? privateBalances.find((balance) => balance.address.toLowerCase() === tokenDetailAddress.toLowerCase()) || null
+    : null;
 
   return (
-    <main className="app">
-      <h1>Shielded</h1>
-      <p className="muted">Sepolia pool integrated. Public and private balances are clearly separated.</p>
-
-      {!wallet && (
-        <section className="card">
-          <h2>Wallet Setup</h2>
-          <label>Choose flow</label>
-          <select
-            value={onboardingMode}
-            onChange={(e) => setOnboardingMode(e.target.value as "create" | "import_phrase" | "import_pk")}
-          >
-            <option value="create">Create new wallet</option>
-            <option value="import_phrase">Import with seed phrase</option>
-            <option value="import_pk">Import with private key</option>
-          </select>
-
-          {onboardingMode === "create" && (
-            <form onSubmit={onCreateWallet}>
-              <label>Vault password</label>
-              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-              <button type="submit" disabled={isActionRunning("Creating wallet")}>
-                {isActionRunning("Creating wallet") ? "Creating..." : "Create Wallet"}
-              </button>
-            </form>
-          )}
-
-          {onboardingMode === "import_phrase" && (
-            <form onSubmit={onImportByPhrase}>
-              <label>Seed phrase</label>
-              <input value={seedPhrase} onChange={(e) => setSeedPhrase(e.target.value)} placeholder="12/24 words..." />
-              <label>Seed passphrase (optional)</label>
-              <input value={seedPassphrase} onChange={(e) => setSeedPassphrase(e.target.value)} />
-              <label>Vault password</label>
-              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-              <button type="submit" disabled={isActionRunning("Importing wallet from phrase")}>
-                {isActionRunning("Importing wallet from phrase") ? "Importing..." : "Import Wallet"}
-              </button>
-            </form>
-          )}
-
-          {onboardingMode === "import_pk" && (
-            <form onSubmit={onImportByPrivateKey}>
-              <label>Private key</label>
-              <input value={privateKey} onChange={(e) => setPrivateKey(e.target.value)} placeholder="0x..." />
-              <label>Vault password</label>
-              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-              <button type="submit" disabled={isActionRunning("Importing wallet from private key")}>
-                {isActionRunning("Importing wallet from private key") ? "Importing..." : "Import Wallet"}
-              </button>
-            </form>
-          )}
-
-          {newWalletPhrase && (
-            <div className="card">
-              <h3>Backup Phrase</h3>
-              <p className="muted">Store this safely. It is shown only once.</p>
-              <p>{newWalletPhrase}</p>
-            </div>
-          )}
-          {vaultMeta && (
-            <form onSubmit={onUnlock}>
-              <p className="muted">Existing vault: {fmt(vaultMeta.address)}</p>
-              <label>Password to unlock</label>
-              <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
-              <button type="submit" disabled={isActionRunning("Unlocking wallet")}>
-                {isActionRunning("Unlocking wallet") ? "Unlocking..." : "Unlock Wallet"}
-              </button>
-            </form>
-          )}
-        </section>
-      )}
-
-      {wallet && (
-        <>
-          <section className="card">
-            <h2>Account</h2>
-            <p>{wallet.address}</p>
-            <label>Key Access</label>
-            <button
-              type="button"
-              disabled={isActionRunning("Loading keys")}
-              onClick={async () => {
-                await runAction("Loading keys", async () => {
-                  if (!showSensitiveKeys) await ensureDerivedKeys(wallet);
-                  setShowSensitiveKeys((prev) => !prev);
-                }, "Failed to derive keys");
-              }}
-            >
-              {isActionRunning("Loading keys") ? "Loading..." : showSensitiveKeys ? "Hide all keys" : "View all keys"}
-            </button>
-            <button
-              type="button"
-              disabled={isActionRunning("Refreshing balances")}
-              onClick={() =>
-                runAction("Refreshing balances", async () => refreshBalancesWithRetry(wallet), "Refresh failed", 180000)
-              }
-            >
-              {isActionRunning("Refreshing balances") ? "Refreshing..." : "Refresh keys and balances"}
-            </button>
-            <button
-              disabled={false}
-              onClick={() => {
-                clearVault();
-                clearAllScanCache();
-                setWallet(null);
-              }}
-            >
-              Lock & Clear Vault
-            </button>
-          </section>
-
-          {(derivedKeys || showSensitiveKeys) && (
-            <section className="card">
-              <h2>Shielded Keys (Derived)</h2>
-              <p className="muted">Deterministically linked to your wallet secret for this account.</p>
-              {showSensitiveKeys && derivedKeys && (
-                <div className="key-list">
-                  <p className="key-item">
-                    <strong>EOA private key</strong>
-                    <span>{wallet?.privateKey}</span>
-                  </p>
-                  <p className="key-item">
-                    <strong>shielded_address</strong>
-                    <span>
-                      {encodeShieldedAddress({
-                        ownerPk: BigInt(derivedKeys.ownerPk),
-                        viewingPub: derivedKeys.viewingPub as `0x${string}`,
-                        chainId: SEPOLIA.chainId,
-                      })}
-                    </span>
-                  </p>
-                  <p className="key-item">
-                    <strong>owner_pk</strong>
-                    <span>{derivedKeys.ownerPk}</span>
-                  </p>
-                  <p className="key-item">
-                    <strong>viewing_pub</strong>
-                    <span>{derivedKeys.viewingPub}</span>
-                  </p>
-                  <p className="key-item">
-                    <strong>spending_key</strong>
-                    <span>{derivedKeys.spendingKey}</span>
-                  </p>
-                  <p className="key-item">
-                    <strong>viewing_priv</strong>
-                    <span>{derivedKeys.viewingPriv}</span>
-                  </p>
-                  <p className="key-item">
-                    <strong>fee_recipient_pk</strong>
-                    <span>{derivedKeys.feeRecipientPk}</span>
-                  </p>
-                </div>
-              )}
-              {showSensitiveKeys && !derivedKeys && <p className="muted">Deriving keys...</p>}
-              {!showSensitiveKeys && <p className="muted">Keys are hidden. Use "View all keys" above.</p>}
-            </section>
-          )}
-
-          <section className="grid">
-            <div className="card">
-              <h3>Public Balance</h3>
-              <label>Active token</label>
-              <select value={selectedToken} onChange={(e) => setSelectedToken(e.target.value as `0x${string}`)}>
-                {importedTokens.map((t) => (
-                  <option key={t.address} value={t.address}>
-                    {t.symbol} ({fmt(t.address)})
-                  </option>
-                ))}
-              </select>
-              <p>ETH: {publicEth}</p>
-              <p>
-                {tokenSymbol}: {publicToken}
-              </p>
-            </div>
-            <div className="card">
-              <h3>Private Balance</h3>
-              <p>Selected token spendable notes: {shieldedNotes}</p>
-              <p>{tokenSymbol} (shielded): {shieldedSpendable}</p>
-              {privateBalances.length > 0 ? (
-                <div className="key-list">
-                  {privateBalances.map((b) => (
-                    <p key={b.address} className="key-item">
-                      <strong>{b.symbol}</strong>
-                      <span>
-                        {b.spendableAmount} ({b.spendableNotes} notes)
-                      </span>
-                    </p>
-                  ))}
-                </div>
-              ) : (
-                <p className="muted">No spendable private notes yet.</p>
-              )}
-            </div>
-          </section>
-
-          <section className="card">
-            <h2>Import Token</h2>
-            <form onSubmit={onImportToken}>
-              <label>Token contract address</label>
-              <input value={newTokenAddress} onChange={(e) => setNewTokenAddress(e.target.value)} placeholder="0x..." />
-              <button type="submit" disabled={isActionRunning("Importing token")}>
-                {isActionRunning("Importing token") ? "Importing..." : "Import token"}
-              </button>
-            </form>
-          </section>
-
-          <section className="card">
-            <h2>Shield Public -&gt; Private</h2>
-            <p className="muted">Deposits selected ERC20 into the pool and mints a private note to your derived keys.</p>
-            {isActionRunning("Shielding token") && (
-              <p className="muted">Shield in progress: approving token, then submitting shield transaction...</p>
+    <main className="wallet-root">
+      {!wallet ? (
+        <section className="screen" style={{minHeight: 580, placeContent: "center"}}>
+          <div style={{textAlign: "center"}}>
+            <div className="shield-pulse" style={{fontSize: 48}}>🛡</div>
+            <h1 className="screen-title">Shielded</h1>
+          </div>
+          <Card>
+            {onboardingStep === "choice" && (
+              <div className="stack">
+                <p className="label">Get started</p>
+                <Card interactive onClick={() => setOnboardingStep("create")}>
+                  <p className="screen-title" style={{fontSize: 14}}>Create a new wallet</p>
+                  <p className="muted">Generate a fresh account with a recovery phrase.</p>
+                </Card>
+                <Card interactive onClick={() => setOnboardingStep("import_phrase")}>
+                  <p className="screen-title" style={{fontSize: 14}}>Import using Secret Recovery Phrase</p>
+                  <p className="muted">Restore your existing wallet using 12/24 words.</p>
+                </Card>
+                <Card interactive onClick={() => setOnboardingStep("import_pk")}>
+                  <p className="screen-title" style={{fontSize: 14}}>Import using private key</p>
+                  <p className="muted">Advanced import for raw private key holders.</p>
+                </Card>
+                {vaultMeta && <Button variant="ghost" onClick={() => setOnboardingStep("unlock")}>Unlock existing wallet</Button>}
+              </div>
             )}
-            <form onSubmit={onShield}>
-              <label>Token</label>
-              <input value={`${tokenSymbol} (${fmt(selectedToken)})`} readOnly />
-              <label>Amount</label>
-              <input value={shieldAmount} onChange={(e) => setShieldAmount(e.target.value)} placeholder="0.0" />
-              <button type="submit" disabled={isActionRunning("Shielding token")}>
-                {isActionRunning("Shielding token") ? "Shielding..." : "Shield to private balance"}
-              </button>
-            </form>
-          </section>
 
-          <section className="card">
-            <h2>Unshield Private -&gt; Public</h2>
-            <p className="muted">Withdraws selected token from a private note to a public recipient address.</p>
-            <p className="muted">
-              Current flow unshields an exact note amount. If no note matches, split first via private transfer.
-            </p>
-            <form onSubmit={onUnshield}>
-              <label>Destination</label>
-              <select value={unshieldToMode} onChange={(e) => setUnshieldToMode(e.target.value as "self" | "custom")}>
-                <option value="self">My address ({fmt(wallet.address)})</option>
-                <option value="custom">Another address</option>
-              </select>
-              {unshieldToMode === "custom" && (
-                <>
-                  <label>Recipient</label>
-                  <input value={unshieldRecipient} onChange={(e) => setUnshieldRecipient(e.target.value)} placeholder="0x..." />
-                </>
-              )}
-              <label>Amount</label>
-              <input value={unshieldAmount} onChange={(e) => setUnshieldAmount(e.target.value)} placeholder="Exact note amount" />
-              <button type="submit" disabled={isActionRunning("Submitting unshield")}>
-                {isActionRunning("Submitting unshield") ? "Unshielding..." : "Unshield to public"}
-              </button>
-            </form>
-          </section>
+            {onboardingStep === "unlock" && (
+              <form className="stack" onSubmit={onUnlock}>
+                <div className="row">
+                  <p className="label">Unlock</p>
+                  <Button type="button" variant="ghost" fullWidth={false} onClick={() => setOnboardingStep("choice")}>Back</Button>
+                </div>
+                <p className="muted">Account: {vaultMeta ? fmt(vaultMeta.address) : "vault found"}</p>
+                <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" />
+                <Button type="submit">Unlock</Button>
+              </form>
+            )}
 
-          <section className="card">
-            <h2>Send</h2>
-            <form onSubmit={onPublicSend}>
-              <label>Mode</label>
-              <select value={sendMode} onChange={(e) => setSendMode(e.target.value as "public" | "private")}>
-                <option value="public">Public transfer</option>
-                <option value="private">Private transfer</option>
-              </select>
-              <label>Asset</label>
-              <select value={sendAsset} onChange={(e) => setSendAsset(e.target.value as "eth" | "token")}>
-                <option value="token">{tokenSymbol}</option>
-                <option value="eth">ETH</option>
-              </select>
-              {sendMode === "public" && (
-                <>
-                  <label>Recipient</label>
-                  <input value={sendTo} onChange={(e) => setSendTo(e.target.value)} placeholder="0x..." />
-                </>
+            {onboardingStep === "create" && <form className="stack" onSubmit={onCreateWallet}><div className="row"><p className="label">Create wallet</p><Button type="button" variant="ghost" fullWidth={false} onClick={() => setOnboardingStep("choice")}>Back</Button></div><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Create password" /><Button type="submit">Create Wallet</Button></form>}
+            {onboardingStep === "import_phrase" && <form className="stack" onSubmit={onImportByPhrase}><div className="row"><p className="label">Import phrase</p><Button type="button" variant="ghost" fullWidth={false} onClick={() => setOnboardingStep("choice")}>Back</Button></div><Input value={seedPhrase} onChange={(e) => setSeedPhrase(e.target.value)} placeholder="12/24 words..." /><Input value={seedPassphrase} onChange={(e) => setSeedPassphrase(e.target.value)} placeholder="Passphrase (optional)" /><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Create password" /><Button type="submit">Import Wallet</Button></form>}
+            {onboardingStep === "import_pk" && <form className="stack" onSubmit={onImportByPrivateKey}><div className="row"><p className="label">Import private key</p><Button type="button" variant="ghost" fullWidth={false} onClick={() => setOnboardingStep("choice")}>Back</Button></div><Input value={privateKey} onChange={(e) => setPrivateKey(e.target.value)} placeholder="0x..." mono /><Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Create password" /><Button type="submit">Import Wallet</Button></form>}
+            {onboardingStep === "recovery" && (
+              <Card>
+                <p className="label">Secret Recovery Phrase</p>
+                <p className="muted">Write this down and store it offline. You can recover your wallet using this phrase at any time.</p>
+                <p className="mono">{newWalletPhrase}</p>
+                <div className="row gap" style={{marginTop: 10}}>
+                  <Button type="button" variant="ghost" onClick={() => setOnboardingStep("choice")}>Back</Button>
+                  <Button type="button" onClick={() => setOnboardingStep("unlock")}>I saved it</Button>
+                </div>
+              </Card>
+            )}
+          </Card>
+        </section>
+      ) : (
+        <>
+          <TopHeader onLock={() => { clearVault(); clearAllScanCache(); setWallet(null); }} />
+          <section className="shell-content">
+            <div className={`screen ${direction === "forward" ? "screen-forward" : "screen-backward"}`}>
+              {route === "home" && <>
+                <Card>
+                  <div className="row">
+                    <span className="mono">{fmt(wallet.address)}</span>
+                    <Button variant="ghost" fullWidth={false} onClick={() => navigator.clipboard.writeText(wallet.address)}>Copy</Button>
+                  </div>
+                  <p className="label">ETH Balance</p>
+                  <p className="hero">{Number(publicEth).toFixed(4)} ETH</p>
+                  <p className="muted">{tokenSymbol}: {publicToken}</p>
+                </Card>
+                <Card className="private-card">
+                  <div className="row"><span>🔒 Private Balance</span><Badge variant="private">SHIELDED</Badge></div>
+                  <p className="hero">{privateBalances.length} assets</p>
+                  <p className="muted">Unified shielded portfolio • {totalShieldedNotes} spendable notes</p>
+                </Card>
+                <Card>
+                  <div className="row"><p className="screen-title" style={{fontSize: 14}}>Tokens</p><Button type="button" variant="ghost" fullWidth={false} onClick={() => pushRoute("token-import")}>Import</Button></div>
+                  <div className="stack">
+                    {importedTokens.map((token) => {
+                      const privateToken = privateBalances.find((entry) => entry.address.toLowerCase() === token.address.toLowerCase());
+                      return (
+                        <button
+                          key={token.address}
+                          type="button"
+                          className="token-row"
+                          onClick={() => {
+                            setTokenDetailAddress(token.address);
+                            pushRoute("token-detail");
+                          }}
+                        >
+                          <div>
+                            <p>{token.symbol}</p>
+                            <p className="muted mono">{fmt(token.address)}</p>
+                          </div>
+                          <div style={{textAlign: "right"}}>
+                            <p className="mono">{token.address.toLowerCase() === selectedToken.toLowerCase() ? `${publicToken} ${token.symbol}` : "—"}</p>
+                            <p className="muted">Shielded: {privateToken ? privateToken.spendableAmount : "0"}</p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </Card>
+                <div className="row gap">
+                  <Button variant="ghost" onClick={() => pushRoute("shield")}>Shield</Button>
+                  <Button variant="ghost" onClick={() => pushRoute("unshield")}>Unshield</Button>
+                </div>
+                <div className="row gap">
+                  <Button variant="ghost" onClick={() => pushRoute("send")}>Send</Button>
+                  <Button variant="ghost" onClick={() => pushRoute("keys")}>Keys</Button>
+                </div>
+              </>}
+
+              {route === "shield" && <form className="stack" onSubmit={onShield}>
+                <div className="row"><h2 className="screen-title">Shield Funds</h2><Button type="button" variant="ghost" fullWidth={false} onClick={popRoute}>Back</Button></div>
+                <select className="input" value={selectedToken} onChange={(e) => setSelectedToken(e.target.value as `0x${string}`)}>{importedTokens.map((t) => <option key={t.address} value={t.address}>{t.symbol} ({fmt(t.address)})</option>)}</select>
+                <Input value={shieldAmount} onChange={(e) => setShieldAmount(e.target.value)} rightSlot={<Button type="button" variant="ghost" fullWidth={false} onClick={() => setShieldAmount(publicToken)}>MAX</Button>} />
+                <p className="muted">Your funds will be split into 2 private notes for flexible spending.</p>
+                <Button type="submit">Shield Funds</Button>
+              </form>}
+
+              {route === "unshield" && <form className="stack" onSubmit={onUnshield}>
+                <div className="row"><h2 className="screen-title">Unshield</h2><Button type="button" variant="ghost" fullWidth={false} onClick={popRoute}>Back</Button></div>
+                <select className="input" value={unshieldToMode} onChange={(e) => setUnshieldToMode(e.target.value as "self" | "custom")}><option value="self">My Wallet ({fmt(wallet.address)})</option><option value="custom">Custom Address</option></select>
+                {unshieldToMode === "custom" && <Input value={unshieldRecipient} onChange={(e) => setUnshieldRecipient(e.target.value)} placeholder="0x..." mono />}
+                <Input value={unshieldAmount} onChange={(e) => setUnshieldAmount(e.target.value)} rightSlot={<Button type="button" variant="ghost" fullWidth={false} onClick={() => setUnshieldAmount(shieldedSpendable)}>FULL</Button>} />
+                <Button type="submit">Unshield</Button>
+              </form>}
+
+              {route === "send" && <form className="stack" onSubmit={onPublicSend}>
+                <div className="row"><h2 className="screen-title">Send</h2><Button type="button" variant="ghost" fullWidth={false} onClick={popRoute}>Back</Button></div>
+                <div className="row gap">
+                  <Button type="button" variant="ghost" onClick={() => setSendMode("public")}>Public</Button>
+                  <Button type="button" onClick={() => { setSendMode("private"); pushRoute("send-private"); }}>Private</Button>
+                </div>
+                <select className="input" value={sendAsset} onChange={(e) => setSendAsset(e.target.value as "eth" | "token")}><option value="token">{tokenSymbol}</option><option value="eth">ETH</option></select>
+                <Input value={sendTo} onChange={(e) => setSendTo(e.target.value)} placeholder="0x..." mono />
+                <Input value={sendAmount} onChange={(e) => setSendAmount(e.target.value)} placeholder="0.0" />
+                <Button type="submit">Send</Button>
+              </form>}
+
+              {route === "send-private" && <form className="stack" onSubmit={onPublicSend}>
+                <div className="row"><h2 className="screen-title">Private Transfer</h2><Button type="button" variant="ghost" fullWidth={false} onClick={popRoute}>Back</Button></div>
+                <Input value={recipientShieldedAddress} onChange={(e) => setRecipientShieldedAddress(e.target.value)} placeholder="shd_..." mono />
+                <label><input type="checkbox" checked={advancedRecipientMode} onChange={(e) => setAdvancedRecipientMode(e.target.checked)} /> Advanced manual recipient keys</label>
+                {advancedRecipientMode && <Card><Input value={recipientOwnerPk} onChange={(e) => setRecipientOwnerPk(e.target.value)} placeholder="owner_pk" /><Input value={recipientViewingPub} onChange={(e) => setRecipientViewingPub(e.target.value)} placeholder="viewing_pub" mono /></Card>}
+                <Input value={sendAmount} onChange={(e) => setSendAmount(e.target.value)} rightSlot={<Button type="button" variant="ghost" fullWidth={false} onClick={() => setSendAmount(shieldedSpendable)}>MAX</Button>} />
+                <Input value={relayerUrl} onChange={(e) => setRelayerUrl(e.target.value)} />
+                <Button type="submit">Send Privately</Button>
+              </form>}
+
+              {route === "keys" && <>
+                <div className="row"><h2 className="screen-title">Shielded Identity</h2><Button type="button" variant="ghost" fullWidth={false} onClick={popRoute}>Back</Button></div>
+                <Card>
+                  <p className="label">Shielded address</p>
+                  <p className="mono">{derivedKeys ? encodeShieldedAddress({ownerPk: BigInt(derivedKeys.ownerPk), viewingPub: derivedKeys.viewingPub as `0x${string}`, chainId: SEPOLIA.chainId}) : "Loading..."}</p>
+                  <Button variant="ghost" onClick={() => derivedKeys && navigator.clipboard.writeText(encodeShieldedAddress({ownerPk: BigInt(derivedKeys.ownerPk), viewingPub: derivedKeys.viewingPub as `0x${string}`, chainId: SEPOLIA.chainId}))}>Copy</Button>
+                </Card>
+                <Card>
+                  <Button variant="ghost" onClick={() => setShowRevealConfirm(true)}>{showSensitiveKeys ? "Hide Keys" : "Reveal Key Material"}</Button>
+                  {showSensitiveKeys && derivedKeys && <div className="blurred"><p className="mono">owner_pk: {derivedKeys.ownerPk}</p><p className="mono">viewing_pub: {derivedKeys.viewingPub}</p><p className="mono">spending_key: {derivedKeys.spendingKey}</p><p className="mono">viewing_priv: {derivedKeys.viewingPriv}</p></div>}
+                </Card>
+              </>}
+
+              {route === "token-import" && (
+                <form className="stack" onSubmit={onImportToken}>
+                  <div className="row"><h2 className="screen-title">Import Token</h2><Button type="button" variant="ghost" fullWidth={false} onClick={popRoute}>Back</Button></div>
+                  <p className="muted">Paste an ERC20 token contract to add it into your wallet token list.</p>
+                  <Input value={newTokenAddress} onChange={(e) => setNewTokenAddress(e.target.value)} placeholder="0x token address..." mono />
+                  <Button type="submit">Import Token</Button>
+                </form>
               )}
-              <label>Amount</label>
-              <input value={sendAmount} onChange={(e) => setSendAmount(e.target.value)} />
-              {sendMode === "private" && (
-                <>
-                  <label>Recipient shielded address</label>
-                  <input
-                    value={recipientShieldedAddress}
-                    onChange={(e) => setRecipientShieldedAddress(e.target.value)}
-                    placeholder="shd_..."
+
+              {route === "activity" && <>
+                <h2 className="screen-title">Activity</h2>
+                <FilterPills options={["All", "Shielded", "Unshield", "Send", "Receive"]} active={activityFilter} onChange={setActivityFilter} />
+                {filteredActivity.length ? (
+                  <ActivityFeed
+                    items={filteredActivity}
+                    onOpenItem={(id) => {
+                      const chosen = activity.find((entry) => entry.id === id) || null;
+                      setActiveActivity(chosen);
+                      pushRoute("activity-detail");
+                    }}
                   />
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={advancedRecipientMode}
-                      onChange={(e) => setAdvancedRecipientMode(e.target.checked)}
-                    />
-                    Use advanced manual recipient keys
-                  </label>
-                  {advancedRecipientMode && (
-                    <>
-                      <label>Recipient owner_pk</label>
-                      <input
-                        value={recipientOwnerPk}
-                        onChange={(e) => setRecipientOwnerPk(e.target.value)}
-                        placeholder="decimal bigint"
-                      />
-                      <label>Recipient viewing public key</label>
-                      <input
-                        value={recipientViewingPub}
-                        onChange={(e) => setRecipientViewingPub(e.target.value)}
-                        placeholder="0x02..."
-                      />
-                    </>
-                  )}
-                  <label>Relayer URL</label>
-                  <input value={relayerUrl} onChange={(e) => setRelayerUrl(e.target.value)} />
+                ) : (
+                  <Card><p className="muted" style={{textAlign: "center"}}>No activity yet.</p><Button variant="ghost" onClick={() => pushRoute("shield")}>Shield Now</Button></Card>
+                )}
+              </>}
+
+              {route === "activity-detail" && activeActivity && (
+                <ActivityDetail
+                  title={activeActivity.title}
+                  icon={activeActivity.icon}
+                  status={activeActivity.status}
+                  amount={activeActivity.amount}
+                  subtitle={activeActivity.subtitle}
+                  txHash={activeActivity.txHash}
+                  onBack={popRoute}
+                />
+              )}
+
+              {route === "token-detail" && tokenDetailAddress && (
+                <>
+                  <div className="row"><h2 className="screen-title">Token Details</h2><Button type="button" variant="ghost" fullWidth={false} onClick={popRoute}>Back</Button></div>
+                  <Card>
+                    <p className="label">Token</p>
+                    <p className="screen-title" style={{fontSize: 18}}>{selectedShieldedToken ? selectedShieldedToken.symbol : fmt(tokenDetailAddress)}</p>
+                    <p className="muted mono">{tokenDetailAddress}</p>
+                  </Card>
+                  <Card className="private-card">
+                    <p className="label">Total shielded amount</p>
+                    <p className="hero">{selectedShieldedToken ? selectedShieldedToken.spendableAmount : "0"} {selectedShieldedToken ? selectedShieldedToken.symbol : ""}</p>
+                    <p className="muted">{selectedShieldedToken ? selectedShieldedToken.spendableNotes : 0} spendable notes</p>
+                  </Card>
+                  <div className="row gap">
+                    <Button variant="ghost" onClick={() => pushRoute("shield")}>Shield</Button>
+                    <Button variant="ghost" onClick={() => { setSelectedToken(tokenDetailAddress); pushRoute("send-private"); }}>Send Private</Button>
+                  </div>
                 </>
               )}
-              <button type="submit" disabled={isActionRunning("Submitting private transfer") || isActionRunning("Submitting public transfer")}>
-                {isActionRunning("Submitting private transfer")
-                  ? "Sending private..."
-                  : isActionRunning("Submitting public transfer")
-                    ? "Sending public..."
-                    : "Send"}
-              </button>
-            </form>
+            </div>
           </section>
+          <BottomNav active={route === "shield" ? "shield" : route === "send" || route === "send-private" ? "send" : route === "keys" || route === "token-import" ? "keys" : route === "activity" || route === "activity-detail" ? "activity" : "home"} onSelect={goTab} />
         </>
       )}
-
-      <p className="status">{status}</p>
+      <ConfirmModal open={showRevealConfirm} title="Reveal sensitive key material?" body="You are about to display sensitive key material. Make sure no one can see your screen." onCancel={() => setShowRevealConfirm(false)} onConfirm={async () => { setShowRevealConfirm(false); if (!showSensitiveKeys && wallet) await ensureDerivedKeys(wallet); setShowSensitiveKeys((v) => !v); }} />
+      {status && status !== "Ready" && <Toast message={status} tone={/failed|error/i.test(status) ? "error" : /confirmed|synced|created|imported|unlocked/i.test(status) ? "success" : "info"} onDismiss={() => setStatus("")} />}
     </main>
   );
 }
