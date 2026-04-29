@@ -9,10 +9,12 @@ type Props = {
   amount: string;
   subtitle: string;
   txHash?: string;
+  detail?: string;
+  updatedAt?: string;
   onBack: () => void;
 };
 
-export function ActivityDetail({title, icon, status, amount, subtitle, txHash, onBack}: Props) {
+export function ActivityDetail({title, icon, status, amount, subtitle, txHash, detail, updatedAt, onBack}: Props) {
   return (
     <div className="stack">
       <div className="row">
@@ -33,6 +35,8 @@ export function ActivityDetail({title, icon, status, amount, subtitle, txHash, o
       <p className="hero mono">{amount}</p>
       <Card>
         <p className="mono">{subtitle}</p>
+        {detail && <p className="muted" style={{marginTop: 8}}>{detail}</p>}
+        {updatedAt && <p className="muted" style={{marginTop: 6}}>Updated: {updatedAt}</p>}
         <p className="mono" style={{wordBreak: "break-all", marginTop: 8}}>
           {txHash || "N/A"}
         </p>
