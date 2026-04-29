@@ -4,7 +4,19 @@
   "version": "0.1.0",
   "description": "EOA wallet with Sepolia shielded pool discovery and transfer controls.",
   "action": {
-    "default_popup": "index.html"
+    "default_popup": "index.html",
+    "default_icon": {
+      "16": "shielded-icon-tight.png",
+      "32": "shielded-icon-tight.png",
+      "48": "shielded-icon-tight.png",
+      "128": "shielded-icon-tight.png"
+    }
+  },
+  "icons": {
+    "16": "shielded-icon-tight.png",
+    "32": "shielded-icon-tight.png",
+    "48": "shielded-icon-tight.png",
+    "128": "shielded-icon-tight.png"
   },
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self';"

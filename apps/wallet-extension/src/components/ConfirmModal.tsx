@@ -6,9 +6,10 @@ type Props = {
   body: string;
   onCancel: () => void;
   onConfirm: () => void;
+  confirmLabel?: string;
 };
 
-export function ConfirmModal({open, title, body, onCancel, onConfirm}: Props) {
+export function ConfirmModal({open, title, body, onCancel, onConfirm, confirmLabel = "Confirm"}: Props) {
   if (!open) return null;
   return (
     <div className="modal-backdrop">
@@ -19,7 +20,7 @@ export function ConfirmModal({open, title, body, onCancel, onConfirm}: Props) {
           <Button variant="ghost" onClick={onCancel}>
             Cancel
           </Button>
-          <Button onClick={onConfirm}>Reveal</Button>
+          <Button onClick={onConfirm}>{confirmLabel}</Button>
         </div>
       </div>
     </div>

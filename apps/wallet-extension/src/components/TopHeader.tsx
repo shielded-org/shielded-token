@@ -1,20 +1,23 @@
-import {Lock} from "lucide-react";
+import {ChevronDown, Menu} from "lucide-react";
 import {Badge} from "./Badge";
 
 type Props = {
-  onLock: () => void;
+  onOpenMenu: () => void;
+  onToggleAccounts: () => void;
+  activeAccountName: string;
+  accountsOpen: boolean;
 };
 
-export function TopHeader({onLock}: Props) {
+export function TopHeader({onOpenMenu, onToggleAccounts, activeAccountName, accountsOpen}: Props) {
   return (
     <header className="top-header">
-      <div className="header-brand">
-        <span>🛡</span>
-        <strong>Shielded</strong>
-      </div>
+      <button type="button" className="account-pill" onClick={onToggleAccounts} aria-label="Open account switcher">
+        <strong>{activeAccountName}</strong>
+        <ChevronDown size={14} className={accountsOpen ? "chevron-open" : ""} />
+      </button>
       <Badge variant="network">● Sepolia</Badge>
-      <button type="button" className="icon-btn" onClick={onLock}>
-        <Lock size={16} />
+      <button type="button" className="icon-btn" onClick={onOpenMenu} aria-label="Open menu">
+        <Menu size={16} />
       </button>
     </header>
   );
