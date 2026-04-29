@@ -5,7 +5,7 @@
   --surface: #0e0e0e;
   --surface-elevated: #161616;
   --border: #222222;
-  --phosphor: #00ff7f;
+  --phosphor: #0047ab;
   --cyan: #7df9ff;
   --muted: #666666;
   --body: #cccccc;
@@ -32,7 +32,7 @@ body {
   font-family: "DM Sans", Inter, ui-sans-serif, system-ui, sans-serif;
   background-image:
     radial-gradient(circle at top, rgba(125, 249, 255, 0.05), transparent 26%),
-    radial-gradient(circle at 80% 12%, rgba(0, 255, 127, 0.06), transparent 18%),
+    radial-gradient(circle at 80% 12%, rgba(0, 71, 171, 0.08), transparent 18%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.01), transparent 30%);
 }
 
@@ -67,7 +67,7 @@ textarea {
 }
 
 ::selection {
-  background: rgba(0, 255, 127, 0.22);
+  background: rgba(0, 71, 171, 0.28);
   color: var(--white);
 }
 

@@ -21,11 +21,11 @@ export function ProofLoader({
   return (
     <div className="fixed inset-0 z-50 overflow-hidden bg-[#060606]/96 backdrop-blur-sm">
       <div className="scanlines absolute inset-0 opacity-60" />
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(0,255,127,0.08),transparent_32%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(0,71,171,0.12),transparent_32%)]" />
       <div className="relative mx-auto flex min-h-screen w-full max-w-3xl flex-col justify-center px-6">
         <div className="rounded-lg border border-[#222222] bg-[#0d0d0d]/92 p-8 shadow-[0_24px_80px_rgba(0,0,0,0.6)]">
-          <div className="flex items-center gap-3 text-[#00ff7f]">
-            <span className="size-2 rounded-full bg-[#00ff7f] shadow-[0_0_12px_rgba(0,255,127,0.85)] animate-pulse" />
+          <div className="flex items-center gap-3 text-[#0047ab]">
+            <span className="size-2 rounded-full bg-[#0047ab] shadow-[0_0_12px_rgba(0,71,171,0.85)] animate-pulse" />
             <span className="font-mono text-xs uppercase tracking-[0.28em]">
               Prover Active
             </span>
@@ -46,7 +46,7 @@ export function ProofLoader({
                     className={cn(
                       "inline-flex size-6 items-center justify-center rounded-full border text-[10px] font-semibold",
                       index <= currentIndex
-                        ? "border-[#00ff7f]/45 bg-[#00ff7f]/10 text-[#00ff7f]"
+                        ? "border-[#0047ab]/45 bg-[#0047ab]/10 text-[#4d7fd6]"
                         : "border-[#222222] text-[#666666]"
                     )}
                   >
@@ -71,7 +71,7 @@ export function ProofLoader({
           <div className="mt-8">
             <div className="h-2 overflow-hidden rounded-full bg-[#121212]">
               <div
-                className="h-full rounded-full bg-[linear-gradient(90deg,#00ff7f,#7df9ff)] transition-all duration-500"
+                className="h-full rounded-full bg-[linear-gradient(90deg,#0047ab,#4d7fd6)] transition-all duration-500"
                 style={{width: `${percent}%`}}
               />
             </div>

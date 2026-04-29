@@ -87,9 +87,21 @@ export default function UnshieldPage() {
                 </p>
                 <div className="mt-4 grid gap-3">
                   {unspentNotes.map((note) => (
-                    <button key={note.id} type="button" onClick={() => setSelectedNoteId(note.id)} className="text-left">
+                    <div
+                      key={note.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={() => setSelectedNoteId(note.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          setSelectedNoteId(note.id);
+                        }
+                      }}
+                      className="cursor-pointer text-left"
+                    >
                       <NoteCard note={note} selectable selected={selectedNote?.id === note.id} />
-                    </button>
+                    </div>
                   ))}
                 </div>
               </div>

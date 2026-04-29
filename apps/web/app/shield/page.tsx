@@ -97,8 +97,8 @@ export default function ShieldPage() {
             </Button>
 
             {successNote ? (
-              <div className="rounded-[26px] border border-[#00ff7f]/20 bg-[#00ff7f]/8 p-5 shadow-[0_18px_44px_rgba(0,255,127,0.08)]">
-                <p className="hero-kicker font-mono text-xs uppercase text-[#00ff7f]">
+              <div className="rounded-[26px] border border-[#0047ab]/20 bg-[#0047ab]/10 p-5 shadow-[0_18px_44px_rgba(0,71,171,0.12)]">
+                <p className="hero-kicker font-mono text-xs uppercase text-[#4d7fd6]">
                   Note registered
                 </p>
                 <p className="mt-3 text-sm leading-7 text-[#8b8b8b]">
@@ -109,7 +109,7 @@ export default function ShieldPage() {
                   <button
                     type="button"
                     onClick={() => copyText(successNote)}
-                    className="inline-flex items-center gap-2 rounded-md border border-[#222222] px-3 py-2 text-xs text-[#cccccc] transition hover:text-[#00ff7f]"
+                    className="inline-flex items-center gap-2 rounded-md border border-[#222222] px-3 py-2 text-xs text-[#cccccc] transition hover:text-[#0047ab]"
                   >
                     <Copy className="size-3.5" />
                     Copy note
