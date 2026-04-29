@@ -11,7 +11,7 @@ export const TOKENS: TokenDefinition[] = [
     symbol: "sUSD",
     name: "Shielded USD",
     decimals: 6,
-    accent: "from-[#00ff7f]/30 to-[#7df9ff]/12",
+    accent: "from-[#0047ab]/30 to-[#7df9ff]/12",
     icon: "S",
     contractAddress: "0x0000000000000000000000000000000000000000", // TODO: fill in deployed address
   },
@@ -27,7 +27,7 @@ export const TOKENS: TokenDefinition[] = [
     symbol: "sDAI",
     name: "Shielded Dai",
     decimals: 6,
-    accent: "from-[#f2f2f2]/16 to-[#00ff7f]/12",
+    accent: "from-[#f2f2f2]/16 to-[#0047ab]/12",
     icon: "D",
     contractAddress: "0x0000000000000000000000000000000000000000", // TODO: fill in deployed address
   },

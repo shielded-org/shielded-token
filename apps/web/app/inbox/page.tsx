@@ -29,7 +29,7 @@ export default function InboxPage() {
       actions={
         <div className="surface-subtle rounded-[24px] px-4 py-3 text-sm">
           <span className="inline-flex items-center gap-2 text-[#8b8b8b]">
-            <span className="size-2 rounded-full bg-[#00ff7f] animate-pulse" />
+            <span className="size-2 rounded-full bg-[#0047ab] animate-pulse" />
             scanning...
           </span>
           <p className="mt-2 font-mono text-xs text-[#666666]">
@@ -85,7 +85,7 @@ export default function InboxPage() {
                     <span className="font-mono text-sm text-[#f2f2f2]">
                       {formatAmount(note.amount)}
                     </span>
-                    <span className={note.status === "unspent" ? "text-[#00ff7f]" : "text-[#666666]"}>
+                    <span className={note.status === "unspent" ? "text-[#4d7fd6]" : "text-[#666666]"}>
                       {note.status === "unspent" ? "UNSPENT" : "SPENT"}
                     </span>
                     <span className="text-sm text-[#666666]">{relativeTime(note.discoveredAt)}</span>

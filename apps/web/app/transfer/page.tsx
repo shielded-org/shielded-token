@@ -1,6 +1,6 @@
 "use client";
 
-import {ArrowRightLeft, CircleCheckBig} from "lucide-react";
+import {ArrowRightLeft} from "lucide-react";
 import {useMemo, useState} from "react";
 import {NoteCard} from "@/components/notes/note-card";
 import {PageShell} from "@/components/layout/page-shell";
@@ -10,7 +10,6 @@ import {Button} from "@/components/ui/button";
 import {HashDisplay} from "@/components/ui/hash-display";
 import {InputField} from "@/components/ui/input-field";
 import {SelectField} from "@/components/ui/select-field";
-import {StatusBadge} from "@/components/ui/status-badge";
 import {simulateProofFlow, submitRelayerPayload} from "@/lib/protocol";
 import {TOKENS} from "@/lib/constants";
 import {createHex, formatAmount, nowIso} from "@/lib/utils";
@@ -112,7 +111,7 @@ export default function TransferPage() {
       <PageShell
         eyebrow="Private Transfer"
         title="Send without exposing amount or recipient."
-        description="Select an unspent note, derive a proof locally, then hand the encrypted transfer to the relayer. Change routes back to your own note store automatically."
+        description="Select a note, enter the recipient key and amount, then send."
       >
         <div className="grid gap-6 xl:grid-cols-[1fr_0.9fr]">
           <section className="surface-panel rounded-[32px] p-7 sm:p-8">
@@ -140,26 +139,28 @@ export default function TransferPage() {
 
               <div className="surface-subtle rounded-[26px] p-5">
                 <div className="flex items-center justify-between">
-                  <div>
-                    <p className="hero-kicker font-mono text-xs uppercase text-[#666666]">
-                      Note selector
-                    </p>
-                    <p className="mt-2 text-sm text-[#8b8b8b]">
-                      Choose the note you want to spend from, UTXO-style.
-                    </p>
-                  </div>
+                  <p className="hero-kicker font-mono text-xs uppercase text-[#666666]">
+                    Note selector
+                  </p>
                   <span className="text-xs text-[#666666]">{candidateNotes.length} eligible notes</span>
                 </div>
                 <div className="mt-4 grid gap-3">
                   {candidateNotes.map((note) => (
-                    <button
+                    <div
                       key={note.id}
-                      type="button"
+                      role="button"
+                      tabIndex={0}
                       onClick={() => setSelectedNoteId(note.id)}
-                      className="text-left"
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          setSelectedNoteId(note.id);
+                        }
+                      }}
+                      className="cursor-pointer text-left"
                     >
                       <NoteCard note={note} selectable selected={selectedNote?.id === note.id} />
-                    </button>
+                    </div>
                   ))}
                 </div>
               </div>
@@ -182,16 +183,9 @@ export default function TransferPage() {
           <aside className="space-y-5">
             <section className="surface-panel rounded-[32px] p-7">
               <p className="hero-kicker font-mono text-xs uppercase text-[#666666]">
-                Transfer path
+                Transfer summary
               </p>
-              <div className="surface-subtle mt-5 flex items-center justify-between rounded-[24px] p-4">
-                <div>
-                  <p className="text-sm text-[#666666]">Relayer status</p>
-                  <p className="mt-2 text-lg text-[#f2f2f2]">Live submission state</p>
-                </div>
-                <StatusBadge status={relayerStatus} />
-              </div>
-              <div className="surface-subtle mt-4 space-y-3 rounded-[24px] p-4 text-sm">
+              <div className="surface-subtle mt-5 space-y-3 rounded-[24px] p-4 text-sm">
                 <div className="flex items-center justify-between">
                   <span className="text-[#666666]">Input note</span>
                   <span className="font-mono text-[#f2f2f2]">
@@ -199,34 +193,18 @@ export default function TransferPage() {
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-[#666666]">Recipient amount</span>
+                  <span className="text-[#666666]">Amount</span>
                   <span className="font-mono text-[#f2f2f2]">{formatAmount(amount)} {token}</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-[#666666]">Change note</span>
+                  <span className="text-[#666666]">Change</span>
                   <span className="font-mono text-[#f2f2f2]">{changeAmount.toFixed(6)} {token}</span>
                 </div>
-              </div>
-            </section>
-
-            <section className="surface-panel rounded-[32px] p-7">
-              <p className="hero-kicker font-mono text-xs uppercase text-[#666666]">
-                Design note
-              </p>
-              <p className="mt-5 text-sm leading-7 text-[#8b8b8b]">
-                Proof generation can take 10 to 60 seconds in production, so the loading takeover is non-dismissable and step-based. It keeps users confident that the browser is doing real work, not hanging.
-              </p>
-              {confirmedHash ? (
-                <div className="mt-5 rounded-[24px] border border-[#00ff7f]/20 bg-[#00ff7f]/8 p-4 shadow-[0_18px_44px_rgba(0,255,127,0.08)]">
-                  <div className="flex items-center gap-3 text-[#00ff7f]">
-                    <CircleCheckBig className="size-4" />
-                    <span className="text-sm">Transfer confirmed</span>
-                  </div>
-                  <div className="mt-3">
-                    <HashDisplay value={confirmedHash} />
-                  </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[#666666]">Status</span>
+                  <span className="font-mono text-[#f2f2f2] capitalize">{relayerStatus}</span>
                 </div>
-              ) : null}
+              </div>
             </section>
           </aside>
         </div>
