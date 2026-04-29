@@ -1,7 +1,7 @@
 import {ComponentType} from "react";
-import {Activity, Home, KeyRound, Send, Shield} from "lucide-react";
+import {Activity, Download, Home, Send, Shield} from "lucide-react";
 
-type Tab = "home" | "shield" | "send" | "keys" | "activity";
+type Tab = "home" | "shield" | "send" | "receive" | "activity";
 
 type Props = {
   active: Tab;
@@ -12,7 +12,7 @@ const ITEMS: Array<{id: Tab; label: string; icon: ComponentType<{size?: number}>
   {id: "home", label: "Home", icon: Home},
   {id: "shield", label: "Shield", icon: Shield},
   {id: "send", label: "Send", icon: Send},
-  {id: "keys", label: "Keys", icon: KeyRound},
+  {id: "receive", label: "Receive", icon: Download},
   {id: "activity", label: "Activity", icon: Activity},
 ];
 
