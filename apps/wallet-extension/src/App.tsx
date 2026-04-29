@@ -1,5 +1,6 @@
 import {FormEvent, useEffect, useMemo, useRef, useState} from "react";
 import {ethers} from "ethers";
+import {Download, Lock} from "lucide-react";
 
 import {CONTRACTS, ERC20_ABI, POOL_ABI, POOL_DEPLOY_BLOCK, POSEIDON_ABI, SEPOLIA} from "./config";
 import {deriveOwnerPk, deriveUserKeys, keySeedFromPrivateKey, viewingPrivToPub} from "./keys";
@@ -407,7 +408,7 @@ export default function App() {
         const delta = ethers.formatEther(currentEth - previousSnapshot.eth);
         addActivityEntry({
           id: `incoming-eth-${Date.now()}`,
-          icon: "↓",
+          icon: "incoming",
           title: "Public Receive",
           subtitle: "Incoming ETH",
           amount: `+ ${delta} ETH`,
@@ -427,7 +428,7 @@ export default function App() {
         if (curr > prev) {
           addActivityEntry({
             id: `incoming-token-${key}-${Date.now()}`,
-            icon: "↓",
+            icon: "incoming",
             title: "Public Receive",
             subtitle: `Incoming ${t.symbol}`,
             amount: `+ ${ethers.formatUnits(curr - prev, t.decimals)} ${t.symbol}`,
@@ -475,7 +476,7 @@ export default function App() {
       if (alreadyExists) continue;
       addActivityEntry({
         id: `incoming-private-${note.txHash}-${note.commitment}`,
-        icon: "🔒",
+        icon: "incoming",
         title: "Private Receive",
         subtitle: `Incoming ${tokenMeta.symbol}`,
         amount: `+ ${ethers.formatUnits(note.amount, tokenMeta.decimals)} ${tokenMeta.symbol}`,
@@ -762,7 +763,7 @@ export default function App() {
     const pendingShieldId = `pending-shield-${Date.now()}`;
     addActivityEntry({
       id: pendingShieldId,
-      icon: "🔼",
+      icon: "shield",
       title: "Shielded",
       subtitle: "From public wallet",
       amount: `+ ${shieldAmount || "0"} ${tokenSymbol}`,
@@ -856,7 +857,7 @@ export default function App() {
       const pendingId = `pending-private-${Date.now()}`;
       addActivityEntry({
         id: pendingId,
-        icon: "🔒",
+        icon: "private-send",
         title: "Private Send",
         subtitle: recipientShieldedAddress ? `${recipientShieldedAddress.slice(0, 16)}...` : "Advanced recipient",
         amount: `- ${sendAmount || "0"} ${tokenSymbol}`,
@@ -928,7 +929,7 @@ export default function App() {
     const pendingPublicId = `pending-public-${Date.now()}`;
     addActivityEntry({
       id: pendingPublicId,
-      icon: "↑",
+      icon: "public-send",
       title: "Public Send",
       subtitle: `To ${fmt(sendTo || wallet.address)}`,
       amount: `- ${sendAmount || "0"} ${sendAsset === "eth" ? "ETH" : tokenSymbol}`,
@@ -968,7 +969,7 @@ export default function App() {
     const pendingUnshieldId = `pending-unshield-${Date.now()}`;
     addActivityEntry({
       id: pendingUnshieldId,
-      icon: "🔽",
+      icon: "unshield",
       title: "Unshielded",
       subtitle: unshieldToMode === "self" ? `To ${fmt(wallet.address)}` : `To ${fmt(unshieldRecipient || wallet.address)}`,
       amount: `- ${unshieldAmount || "0"} ${tokenSymbol}`,
@@ -1039,7 +1040,7 @@ export default function App() {
   type ActivityFilter = "All" | "Shielded" | "Unshield" | "Send" | "Receive";
   type ActivityEntry = {
     id: string;
-    icon: string;
+    icon: "incoming" | "shield" | "private-send" | "public-send" | "unshield";
     title: string;
     subtitle: string;
     amount: string;
@@ -1066,7 +1067,7 @@ export default function App() {
         const fallbackTime = entry.timeLabel && !Number.isNaN(new Date(entry.timeLabel).getTime()) ? entry.timeLabel : new Date().toISOString();
         return {
           id: entry.id || crypto.randomUUID(),
-          icon: entry.icon || "•",
+          icon: entry.icon || "incoming",
           title: entry.title || "Activity",
           subtitle: entry.subtitle || "",
           amount: entry.amount || "",
@@ -1200,7 +1201,7 @@ export default function App() {
             <div className="lock-landing">
               <div className="lock-brand">Shielded</div>
               <img src="/shielded-icon-light.svg" alt="Shielded icon" className="lock-mascot" />
-              <h1 className="lock-title">Enter your password</h1>
+              <h1 className="lock-title"><Lock size={16} /> Enter your password</h1>
               <form className="stack" onSubmit={onUnlock}>
                 <Input type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" />
                 <Button type="submit">Unlock</Button>
@@ -1314,9 +1315,9 @@ export default function App() {
                   <p className="hero">{Number(publicEth).toFixed(4)} ETH</p>
                 </Card>
                 <Card className="private-card">
-                  <div className="row"><span>🔒 Private Balance</span><Badge variant="private">SHIELDED</Badge></div>
+                  <div className="row"><span style={{display: "inline-flex", alignItems: "center", gap: 6}}><Lock size={14} /> Private Balance</span><Badge variant="private">SHIELDED</Badge></div>
                   <p className="hero">{privateBalances.length} assets</p>
-                  <p className="muted">Unified shielded portfolio • {totalShieldedNotes} spendable notes</p>
+                  <p className="muted">Unified shielded portfolio - {totalShieldedNotes} spendable notes</p>
                 </Card>
                 <Card>
                   <div className="row"><p className="screen-title" style={{fontSize: 14}}>Tokens</p><Button type="button" variant="ghost" fullWidth={false} onClick={() => pushRoute("token-import")}>Import</Button></div>
@@ -1496,7 +1497,7 @@ export default function App() {
 
               {route === "receive" && (
                 <div className="stack">
-                  <div className="row"><h2 className="screen-title">Receive</h2><Button type="button" variant="ghost" fullWidth={false} onClick={popRoute}>Back</Button></div>
+                  <div className="row"><h2 className="screen-title" style={{display: "inline-flex", alignItems: "center", gap: 6}}><Download size={16} /> Receive</h2><Button type="button" variant="ghost" fullWidth={false} onClick={popRoute}>Back</Button></div>
                   <Card>
                     <p className="label">Public receive</p>
                     <p className="muted">Use this for regular ERC20/ETH transfers.</p>

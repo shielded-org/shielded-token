@@ -1,10 +1,11 @@
 import {StatusBadge} from "./StatusBadge";
 import {Card} from "./Card";
 import {Button} from "./Button";
+import {ArrowDownLeft, ArrowUpRight, Circle, Lock, Shield, ShieldOff} from "lucide-react";
 
 type Props = {
   title: string;
-  icon: string;
+  icon: "incoming" | "shield" | "private-send" | "public-send" | "unshield";
   status: "completed" | "pending" | "failed";
   amount: string;
   subtitle: string;
@@ -15,6 +16,17 @@ type Props = {
 };
 
 export function ActivityDetail({title, icon, status, amount, subtitle, txHash, detail, updatedAt, onBack}: Props) {
+  const Icon = icon === "shield"
+    ? Shield
+    : icon === "private-send"
+      ? Lock
+      : icon === "public-send"
+        ? ArrowUpRight
+        : icon === "unshield"
+          ? ShieldOff
+          : icon === "incoming"
+            ? ArrowDownLeft
+            : Circle;
   return (
     <div className="stack">
       <div className="row">
@@ -24,7 +36,7 @@ export function ActivityDetail({title, icon, status, amount, subtitle, txHash, d
         </Button>
       </div>
       <Card>
-        <p style={{fontSize: 40, textAlign: "center"}}>{icon}</p>
+        <p style={{textAlign: "center"}}><Icon size={34} /></p>
         <p className="screen-title" style={{textAlign: "center"}}>
           {title}
         </p>

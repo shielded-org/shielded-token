@@ -1,8 +1,9 @@
 import {PendingPulse} from "./PendingPulse";
+import {ArrowDownLeft, ArrowUpRight, Circle, Lock, Shield, ShieldOff} from "lucide-react";
 
 export type ActivityRowItem = {
   id: string;
-  icon: string;
+  icon: "incoming" | "shield" | "private-send" | "public-send" | "unshield";
   title: string;
   subtitle: string;
   amount: string;
@@ -19,9 +20,20 @@ type Props = {
 export function ActivityRow({item, onClick}: Props) {
   const parsedTime = new Date(item.timeLabel);
   const timeText = Number.isNaN(parsedTime.getTime()) ? item.timeLabel : parsedTime.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+  const Icon = item.icon === "shield"
+    ? Shield
+    : item.icon === "private-send"
+      ? Lock
+      : item.icon === "public-send"
+        ? ArrowUpRight
+        : item.icon === "unshield"
+          ? ShieldOff
+          : item.icon === "incoming"
+            ? ArrowDownLeft
+            : Circle;
   return (
     <button type="button" className={`activity-row ${item.status === "pending" ? "pending" : ""}`} onClick={() => onClick(item.id)}>
-      <div className="activity-icon">{item.icon}</div>
+      <div className="activity-icon"><Icon size={16} /></div>
       <div style={{textAlign: "left"}}>
         <p>{item.title}</p>
         <p className="muted mono">{item.subtitle}</p>
