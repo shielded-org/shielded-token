@@ -19,17 +19,17 @@ export function NoteCard({note, selectable = false, selected = false}: {
   return (
     <article
       className={cn(
-        "interactive-lift rounded-[26px] border bg-[linear-gradient(180deg,rgba(255,255,255,0.024),rgba(255,255,255,0.01))] p-4 transition",
+        "interactive-lift rounded-[26px] border bg-white p-4 transition",
         selected
-          ? "border-[#0047ab]/40 shadow-[0_0_0_1px_rgba(0,71,171,0.16),0_20px_50px_rgba(0,0,0,0.28)]"
-          : "border-white/8",
-        selectable && "hover:border-[#0047ab]/35"
+          ? "border-[#6366f1]/50 shadow-[0_0_0_1px_rgba(99,102,241,0.2),0_10px_24px_rgba(99,102,241,0.14)]"
+          : "border-[#e5e7eb]",
+        selectable && "hover:border-[#818cf8]"
       )}
     >
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-sm text-[#666666]">{note.token}</p>
-          <p className="mt-1 font-mono text-xl text-[#f2f2f2]">
+          <p className="text-sm text-[#6b7280]">{note.token}</p>
+          <p className="mt-1 font-mono text-xl text-[#111827]">
             {formatAmount(note.amount)}
           </p>
         </div>
@@ -37,8 +37,8 @@ export function NoteCard({note, selectable = false, selected = false}: {
           className={cn(
             "rounded-full border px-2 py-1 text-[10px] font-semibold tracking-[0.18em]",
             note.status === "unspent"
-              ? "border-[#0047ab]/25 bg-[#0047ab]/12 text-[#4d7fd6]"
-              : "border-[#2d2d2d] bg-[#181818] text-[#777777]"
+              ? "border-[#bfdbfe] bg-[#eff6ff] text-[#1d4ed8]"
+              : "border-[#e5e7eb] bg-[#f9fafb] text-[#6b7280]"
           )}
         >
           {note.status.toUpperCase()}
@@ -46,7 +46,7 @@ export function NoteCard({note, selectable = false, selected = false}: {
       </div>
       <div className="mt-4 flex items-center justify-between gap-3">
         <HashDisplay value={note.commitment} />
-        <span className="text-xs text-[#666666]">
+        <span className="text-xs text-[#9ca3af]">
           {formatDiscoveredDate(note.discoveredAt)}
         </span>
       </div>

@@ -1,15 +1,15 @@
 @import "tailwindcss";
 
 :root {
-  --background: #060606;
-  --surface: #0e0e0e;
-  --surface-elevated: #161616;
-  --border: #222222;
+  --background: #f3f4f6;
+  --surface: #ffffff;
+  --surface-elevated: #f9fafb;
+  --border: #e5e7eb;
   --phosphor: #0047ab;
-  --cyan: #7df9ff;
-  --muted: #666666;
-  --body: #cccccc;
-  --white: #f2f2f2;
+  --cyan: #4f46e5;
+  --muted: #6b7280;
+  --body: #111827;
+  --white: #ffffff;
 }
 
 @theme inline {
@@ -23,6 +23,7 @@
 
 html {
   background: var(--background);
+  scroll-behavior: smooth;
 }
 
 body {
@@ -30,10 +31,7 @@ body {
   background: var(--background);
   color: var(--body);
   font-family: "DM Sans", Inter, ui-sans-serif, system-ui, sans-serif;
-  background-image:
-    radial-gradient(circle at top, rgba(125, 249, 255, 0.05), transparent 26%),
-    radial-gradient(circle at 80% 12%, rgba(0, 71, 171, 0.08), transparent 18%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.01), transparent 30%);
+  background-image: none;
 }
 
 h1,
@@ -95,22 +93,17 @@ textarea {
 }
 
 .surface-panel {
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0.01)),
-    rgba(14, 14, 14, 0.82);
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.035),
-    0 20px 60px rgba(0, 0, 0, 0.28);
-  backdrop-filter: blur(18px);
+    inset 0 1px 0 rgba(255, 255, 255, 0.6),
+    0 10px 24px rgba(15, 23, 42, 0.04);
 }
 
 .surface-subtle {
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.008)),
-    rgba(16, 16, 16, 0.84);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+  border: 1px solid #e5e7eb;
+  background: #f9fafb;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
 }
 
 .interactive-lift {
@@ -123,11 +116,10 @@ textarea {
 
 .interactive-lift:hover {
   transform: translateY(-2px);
-  border-color: rgba(125, 249, 255, 0.18);
+  border-color: rgba(79, 70, 229, 0.25);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.035),
-    0 20px 50px rgba(0, 0, 0, 0.3),
-    0 0 0 1px rgba(125, 249, 255, 0.06);
+    inset 0 1px 0 rgba(255, 255, 255, 0.8),
+    0 16px 30px rgba(15, 23, 42, 0.06);
 }
 
 .soft-divider {
@@ -139,7 +131,7 @@ textarea {
   position: absolute;
   inset: auto 0 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08), transparent);
+  background: linear-gradient(90deg, transparent, rgba(15, 23, 42, 0.08), transparent);
 }
 
 .hero-kicker {
