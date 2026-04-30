@@ -2,16 +2,17 @@
 
 import Link from "next/link";
 import {usePathname} from "next/navigation";
-import {Shield, TerminalSquare} from "lucide-react";
-import {useEffect} from "react";
+import {Building2, House, Menu, Settings, TerminalSquare, X} from "lucide-react";
+import {useEffect, useState} from "react";
 import {WalletConnection} from "@/components/wallet/wallet-connection";
-import {WalletBar} from "@/components/wallet/wallet-bar";
 import {NAV_ITEMS, RELAYER_URL} from "@/lib/constants";
 import {cn} from "@/lib/utils";
 import {useShieldedStore} from "@/store/use-shielded-store";
 
 export function AppShell({children}: {children: React.ReactNode}) {
   const pathname = usePathname();
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const lastSyncedBlock = useShieldedStore((state) => state.lastSyncedBlock);
   const setRelayerHealth = useShieldedStore((state) => state.setRelayerHealth);
   const setLastSyncedBlock = useShieldedStore((state) => state.setLastSyncedBlock);
 
@@ -52,54 +53,88 @@ export function AppShell({children}: {children: React.ReactNode}) {
   }, [setLastSyncedBlock, setRelayerHealth]);
 
   return (
-    <div className="min-h-screen bg-[#060606] text-[#cccccc]">
-      <div className="grain pointer-events-none fixed inset-0 opacity-100" />
-      <div className="relative mx-auto flex min-h-screen w-full max-w-[1440px] flex-col px-4 pb-10 pt-4 sm:px-6 lg:px-10">
-        <header className="surface-panel rounded-[32px] px-5 py-5 sm:px-6 lg:px-7">
-          <div className="soft-divider flex flex-col gap-5 pb-6 xl:flex-row xl:items-center xl:justify-between">
-            <div className="flex items-center gap-4">
-              <div className="flex size-14 items-center justify-center rounded-2xl border border-white/8 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0.012))] text-[#0047ab] shadow-[0_16px_40px_rgba(0,0,0,0.22)]">
-                <Shield className="size-5" />
-              </div>
-              <div>
-                <h1 className="text-2xl font-bold tracking-[-0.05em] text-[#f2f2f2]">
-                  Shielded Token
-                </h1>
-                <p className="mt-1 text-sm text-[#8b8b8b]">
-                  Private balances and transfers, without the extra noise.
-                </p>
-              </div>
+    <div className="min-h-screen bg-[#f3f4f6] text-[#111827]">
+      <div className="mx-auto flex min-h-screen w-full max-w-[1500px]">
+        {mobileSidebarOpen ? (
+          <button
+            type="button"
+            className="fixed inset-0 z-40 bg-[#111827]/35 lg:hidden"
+            aria-label="Close navigation menu"
+            onClick={() => setMobileSidebarOpen(false)}
+          />
+        ) : null}
+
+        <aside className={cn(
+          "fixed inset-y-0 left-0 z-50 w-[250px] border-r border-[#e5e7eb] bg-[#f8fafc] px-4 py-5 transition-transform duration-200 lg:static lg:z-auto lg:translate-x-0",
+          mobileSidebarOpen ? "translate-x-0" : "-translate-x-full"
+        )}>
+          <div className="flex items-center gap-3 px-2">
+            <div className="flex size-8 items-center justify-center rounded-lg bg-[#111827] text-white">
+              <Building2 className="size-4" />
             </div>
-            <div className="flex flex-col gap-3 xl:items-end">
-              <div className="flex flex-wrap items-center gap-2.5 xl:justify-end">
-                <nav className="flex flex-wrap items-center gap-2.5">
-                  {NAV_ITEMS.map((item) => {
-                    const active = pathname === item.href;
-                    return (
-                      <Link
-                        key={item.href}
-                        href={item.href}
-                        className={cn(
-                          "inline-flex items-center gap-2 rounded-2xl border px-4 py-2.5 text-sm transition-all duration-200",
-                          active
-                            ? "border-[#0047ab]/24 bg-[#0047ab]/12 text-[#f2f2f2] shadow-[0_12px_28px_rgba(0,71,171,0.2)]"
-                            : "border-white/8 bg-white/[0.03] text-[#8b8b8b] hover:-translate-y-0.5 hover:border-white/12 hover:bg-white/[0.05] hover:text-[#f2f2f2]"
-                        )}
-                      >
-                        <TerminalSquare className="size-4" />
-                        {item.label}
-                      </Link>
-                    );
-                  })}
-                </nav>
+            <p className="font-semibold text-[#111827]">Shielded</p>
+            <button
+              type="button"
+              onClick={() => setMobileSidebarOpen(false)}
+              className="ml-auto inline-flex rounded-lg border border-[#e5e7eb] p-1.5 text-[#6b7280] lg:hidden"
+              aria-label="Close navigation"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+          <div className="mt-8 space-y-2">
+            <p className="px-2 text-xs font-semibold uppercase tracking-wide text-[#9ca3af]">Company</p>
+            {NAV_ITEMS.map((item) => {
+              const active = pathname === item.href;
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  onClick={() => setMobileSidebarOpen(false)}
+                  className={cn(
+                    "flex items-center gap-2 rounded-xl px-3 py-2 text-sm",
+                    active ? "bg-[#e5e7eb] text-[#111827]" : "text-[#4b5563] hover:bg-[#eef2f7]"
+                  )}
+                >
+                  <TerminalSquare className="size-4" />
+                  {item.label}
+                </Link>
+              );
+            })}
+          </div>
+          <div className="mt-8 space-y-2">
+            <p className="px-2 text-xs font-semibold uppercase tracking-wide text-[#9ca3af]">Manage</p>
+            <Link href="/settings" onClick={() => setMobileSidebarOpen(false)} className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-[#4b5563] hover:bg-[#eef2f7]">
+              <Settings className="size-4" /> Settings
+            </Link>
+          </div>
+        </aside>
+
+        <div className="flex flex-1 flex-col px-3 py-3 sm:px-4 lg:px-6 lg:py-4">
+          <header className="surface-panel rounded-2xl px-5 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <nav className="flex items-center gap-5 text-sm text-[#4b5563]">
+                <button
+                  type="button"
+                  onClick={() => setMobileSidebarOpen(true)}
+                  className="inline-flex rounded-lg border border-[#e5e7eb] p-1.5 text-[#6b7280] lg:hidden"
+                  aria-label="Open navigation"
+                >
+                  <Menu className="size-4" />
+                </button>
+                <span className="inline-flex items-center gap-1.5 font-medium text-[#111827]"><House className="size-4" /> Home</span>
+                <span className="inline-flex items-center gap-1 rounded-full border border-[#e5e7eb] bg-[#f9fafb] px-2.5 py-1 text-xs text-[#6b7280]">
+                  Synced to block {lastSyncedBlock.toLocaleString()}
+                </span>
+              </nav>
+              <div className="flex items-center gap-2">
                 <WalletConnection />
               </div>
-              <WalletBar />
             </div>
-          </div>
-        </header>
+          </header>
 
-        <main className="flex-1 pt-12">{children}</main>
+          <main className="flex-1 pt-6">{children}</main>
+        </div>
       </div>
     </div>
   );

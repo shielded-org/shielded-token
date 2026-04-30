@@ -64,3 +64,25 @@ export function relativeTime(value: string) {
 export async function copyText(value: string) {
   await navigator.clipboard.writeText(value);
 }
+
+export function isValidHexAddress(value: string) {
+  return /^0x[a-fA-F0-9]{40}$/.test(value.trim());
+}
+
+export function isValidViewingKey(value: string) {
+  return /^0x[a-fA-F0-9]{16,130}$/.test(value.trim());
+}
+
+export function getAmountValidationMessage(value: string, max: number, decimals = 6) {
+  const trimmed = value.trim();
+  if (!trimmed) return "Enter an amount.";
+  if (!/^\d*\.?\d*$/.test(trimmed)) return "Use numbers only.";
+  const numeric = Number(trimmed);
+  if (!Number.isFinite(numeric) || numeric <= 0) return "Amount must be greater than zero.";
+  const parts = trimmed.split(".");
+  if (parts[1] && parts[1].length > decimals) {
+    return `Use up to ${decimals} decimal places.`;
+  }
+  if (numeric > max) return "Amount exceeds available balance.";
+  return null;
+}

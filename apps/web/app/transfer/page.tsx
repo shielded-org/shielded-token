@@ -5,14 +5,14 @@ import {useMemo, useState} from "react";
 import {NoteCard} from "@/components/notes/note-card";
 import {PageShell} from "@/components/layout/page-shell";
 import {ProofLoader} from "@/components/proof/proof-loader";
+import {ActionOutcomeCard} from "@/components/ui/action-outcome-card";
 import {AmountInput} from "@/components/ui/amount-input";
 import {Button} from "@/components/ui/button";
-import {HashDisplay} from "@/components/ui/hash-display";
 import {InputField} from "@/components/ui/input-field";
 import {SelectField} from "@/components/ui/select-field";
 import {simulateProofFlow, submitRelayerPayload} from "@/lib/protocol";
 import {TOKENS} from "@/lib/constants";
-import {createHex, formatAmount, nowIso} from "@/lib/utils";
+import {createHex, formatAmount, getAmountValidationMessage, isValidViewingKey, nowIso} from "@/lib/utils";
 import {useShieldedStore} from "@/store/use-shielded-store";
 import type {ProofStep, TransactionStatus} from "@/lib/types";
 
@@ -41,6 +41,8 @@ export default function TransferPage() {
   const selectedNote =
     candidateNotes.find((note) => note.id === selectedNoteId) ?? candidateNotes[0];
   const changeAmount = Math.max(0, Number(selectedNote?.amount ?? 0) - Number(amount || 0));
+  const recipientError = isValidViewingKey(recipient) ? null : "Enter a valid recipient viewing key (hex format).";
+  const amountError = getAmountValidationMessage(amount, Number(selectedNote?.amount ?? 0), 6);
 
   async function handleTransfer() {
     if (!selectedNote) return;
@@ -111,18 +113,19 @@ export default function TransferPage() {
       <PageShell
         eyebrow="Private Transfer"
         title="Send without exposing amount or recipient."
-        description="Select a note, enter the recipient key and amount, then send."
+      description="Select an unspent note, set recipient and amount, then generate proof and send privately."
       >
         <div className="grid gap-6 xl:grid-cols-[1fr_0.9fr]">
           <section className="surface-panel rounded-[32px] p-7 sm:p-8">
             <div className="grid gap-5">
               <label className="space-y-2">
-                <span className="text-sm text-[#8b8b8b]">Recipient viewing public key</span>
+                <span className="text-sm text-[#6b7280]">Recipient viewing public key</span>
                 <InputField value={recipient} onChange={(event) => setRecipient(event.target.value)} />
+                {recipientError ? <p className="text-xs text-amber-300">{recipientError}</p> : null}
               </label>
               <div className="grid gap-4 md:grid-cols-2">
                 <label className="space-y-2">
-                  <span className="text-sm text-[#8b8b8b]">Token</span>
+                  <span className="text-sm text-[#6b7280]">Token</span>
                   <SelectField value={token} onChange={(event) => setToken(event.target.value)}>
                     {TOKENS.map((item) => (
                       <option key={item.symbol} value={item.symbol}>
@@ -132,17 +135,18 @@ export default function TransferPage() {
                   </SelectField>
                 </label>
                 <label className="space-y-2">
-                  <span className="text-sm text-[#8b8b8b]">Amount</span>
+                  <span className="text-sm text-[#6b7280]">Amount</span>
                   <AmountInput value={amount} onChange={setAmount} />
+                  {amountError ? <p className="text-xs text-amber-300">{amountError}</p> : null}
                 </label>
               </div>
 
               <div className="surface-subtle rounded-[26px] p-5">
                 <div className="flex items-center justify-between">
-                  <p className="hero-kicker font-mono text-xs uppercase text-[#666666]">
+                  <p className="hero-kicker font-mono text-xs uppercase text-[#9ca3af]">
                     Note selector
                   </p>
-                  <span className="text-xs text-[#666666]">{candidateNotes.length} eligible notes</span>
+                  <span className="text-xs text-[#9ca3af]">{candidateNotes.length} eligible notes</span>
                 </div>
                 <div className="mt-4 grid gap-3">
                   {candidateNotes.map((note) => (
@@ -170,39 +174,52 @@ export default function TransferPage() {
               <Button
                 className="rounded-2xl"
                 onClick={handleTransfer}
-                disabled={!selectedNote || Number(amount) <= 0 || Number(selectedNote?.amount ?? 0) < Number(amount)}
+                disabled={!selectedNote || Boolean(amountError) || Boolean(recipientError)}
                 icon={<ArrowRightLeft className="size-4" />}
               >
                 Generate proof and send
               </Button>
-              {confirmedHash ? <HashDisplay value={confirmedHash} /> : null}
-              {requestId ? <span className="font-mono text-xs text-[#666666]">{requestId}</span> : null}
+              {!selectedNote ? <p className="text-xs text-[#6b7280]">No eligible note for selected token.</p> : null}
+              {selectedNote && (amountError || recipientError) ? (
+                <p className="text-xs text-[#6b7280]">Fix highlighted fields to continue.</p>
+              ) : null}
             </div>
+            {confirmedHash ? (
+              <div className="mt-4">
+                <ActionOutcomeCard
+                  title="Private transfer confirmed"
+                  summary={`Spent 1 note and created ${changeAmount > 0 ? "2 notes (recipient + change)." : "1 recipient note."}`}
+                  visibilityNote="Transfer amount and recipient stay shielded."
+                  txHash={confirmedHash}
+                  requestId={requestId}
+                />
+              </div>
+            ) : null}
           </section>
 
           <aside className="space-y-5">
             <section className="surface-panel rounded-[32px] p-7">
-              <p className="hero-kicker font-mono text-xs uppercase text-[#666666]">
+              <p className="hero-kicker font-mono text-xs uppercase text-[#9ca3af]">
                 Transfer summary
               </p>
               <div className="surface-subtle mt-5 space-y-3 rounded-[24px] p-4 text-sm">
                 <div className="flex items-center justify-between">
-                  <span className="text-[#666666]">Input note</span>
-                  <span className="font-mono text-[#f2f2f2]">
+                  <span className="text-[#9ca3af]">Input note</span>
+                  <span className="font-mono text-[#111827]">
                     {selectedNote ? `${formatAmount(selectedNote.amount)} ${selectedNote.token}` : "-"}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-[#666666]">Amount</span>
-                  <span className="font-mono text-[#f2f2f2]">{formatAmount(amount)} {token}</span>
+                  <span className="text-[#9ca3af]">Amount</span>
+                  <span className="font-mono text-[#111827]">{formatAmount(amount)} {token}</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-[#666666]">Change</span>
-                  <span className="font-mono text-[#f2f2f2]">{changeAmount.toFixed(6)} {token}</span>
+                  <span className="text-[#9ca3af]">Change</span>
+                  <span className="font-mono text-[#111827]">{changeAmount.toFixed(6)} {token}</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-[#666666]">Status</span>
-                  <span className="font-mono text-[#f2f2f2] capitalize">{relayerStatus}</span>
+                  <span className="text-[#9ca3af]">Status</span>
+                  <span className="font-mono text-[#111827] capitalize">{relayerStatus}</span>
                 </div>
               </div>
             </section>

@@ -24,16 +24,16 @@ export function HashDisplay({value, className}: HashDisplayProps) {
       type="button"
       onClick={handleCopy}
       className={cn(
-        "group inline-flex items-center gap-2 rounded-full border border-white/8 bg-white/[0.03] px-3 py-1.5 font-mono text-xs text-[#cccccc] shadow-[inset_0_1px_0_rgba(255,255,255,0.02)] transition hover:-translate-y-0.5 hover:border-[#0047ab]/20 hover:bg-white/[0.05]",
+        "group inline-flex items-center gap-2 rounded-full border border-[#e5e7eb] bg-white px-3 py-1.5 font-mono text-xs text-[#374151] transition hover:-translate-y-0.5 hover:border-[#a5b4fc] hover:bg-[#f8fafc]",
         className
       )}
       title={value}
     >
       <span>{shortenHash(value)}</span>
       {copied ? (
-        <Check className="size-3.5 text-[#0047ab]" />
+        <Check className="size-3.5 text-[#4f46e5]" />
       ) : (
-        <Copy className="size-3.5 text-[#666666] transition group-hover:text-[#0047ab]" />
+        <Copy className="size-3.5 text-[#9ca3af] transition group-hover:text-[#4f46e5]" />
       )}
     </button>
   );
