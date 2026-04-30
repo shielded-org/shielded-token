@@ -1,42 +1,55 @@
 "use client";
 
 import {BadgeCheck, PlugZap} from "lucide-react";
+import {ethers} from "ethers";
 import {useMemo, useState} from "react";
-import {formatUnits} from "viem";
-import {useAccount, useBalance, useChainId, useConnect, useDisconnect} from "wagmi";
 import {Button} from "@/components/ui/button";
+import {listInjectedProviders, setActiveInjectedProvider} from "@/lib/injected-wallet";
 import {shortenHash} from "@/lib/utils";
 import {mainnet, sepolia} from "wagmi/chains";
+import {useShieldedStore} from "@/store/use-shielded-store";
 
 export function WalletConnection() {
-  const {address, isConnected} = useAccount();
-  const chainId = useChainId();
-  const {connect, connectors, isPending} = useConnect();
-  const {disconnect} = useDisconnect();
+  const address = useShieldedStore((state) => state.walletAddress);
+  const chainId = useShieldedStore((state) => state.chainId);
+  const setWalletConnection = useShieldedStore((state) => state.setWalletConnection);
+  const clearKeyMaterial = useShieldedStore((state) => state.clearKeyMaterial);
   const [showWalletDialog, setShowWalletDialog] = useState(false);
   const [pendingConnectorId, setPendingConnectorId] = useState<string | null>(null);
-  const {data: balance} = useBalance({
-    address,
-    query: {enabled: Boolean(address)},
-  });
+  const [nativeBalance, setNativeBalance] = useState<string | null>(null);
+  const isConnected = Boolean(address);
   const chainName = chainId === mainnet.id ? "Mainnet" : chainId === sepolia.id ? "Sepolia" : `Chain ${chainId}`;
   const supportedChain = chainId === mainnet.id || chainId === sepolia.id;
   const availableConnectors = useMemo(() => {
-    const seen = new Set<string>();
-    return connectors.filter((connector) => {
-      const key = `${connector.id}:${connector.name}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }, [connectors]);
+    return listInjectedProviders().map((item) => ({id: item.name.toLowerCase(), name: item.name, provider: item.provider}));
+  }, []);
   const connectorUnavailable = availableConnectors.length === 0;
+  const isPending = pendingConnectorId !== null;
 
-  function connectWith(connectorId: string) {
+  async function connectWith(connectorId: string) {
     const connector = availableConnectors.find((item) => item.id === connectorId);
     if (!connector) return;
-    setPendingConnectorId(connector.id);
-    connect({connector});
+    try {
+      setPendingConnectorId(connector.id);
+      setActiveInjectedProvider(connector.provider);
+      const result = (await connector.provider.request({method: "eth_requestAccounts"})) as string[];
+      const selected = result?.[0];
+      if (!selected) throw new Error("No wallet account returned.");
+      const chainHex = (await connector.provider.request({method: "eth_chainId"})) as string;
+      const provider = new ethers.BrowserProvider(connector.provider as unknown as ethers.Eip1193Provider);
+      const balance = await provider.getBalance(selected);
+      setNativeBalance(ethers.formatEther(balance));
+      setWalletConnection(selected as `0x${string}`, Number(chainHex));
+      setShowWalletDialog(false);
+    } finally {
+      setPendingConnectorId(null);
+    }
+  }
+
+  async function disconnectWallet() {
+    setWalletConnection(null, null);
+    setNativeBalance(null);
+    clearKeyMaterial();
   }
 
   return (
@@ -46,8 +59,8 @@ export function WalletConnection() {
           <BadgeCheck className="size-3.5 text-[#4f46e5]" />
           <span className="font-mono">{shortenHash(address ?? "")}</span>
           <span className="text-[#6b7280]">
-            {balance
-              ? `${Number(formatUnits(balance.value, balance.decimals)).toFixed(3)} ${balance.symbol}`
+            {nativeBalance
+              ? `${Number(nativeBalance).toFixed(3)} ETH`
               : chainName}
           </span>
           {!supportedChain ? (
@@ -61,7 +74,7 @@ export function WalletConnection() {
         </div>
       ) : null}
       {isConnected ? (
-        <Button variant="secondary" onClick={() => disconnect()}>
+        <Button variant="secondary" onClick={disconnectWallet}>
           Disconnect
         </Button>
       ) : (

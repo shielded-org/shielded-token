@@ -2,13 +2,17 @@
 
 import {create} from "zustand";
 import {createJSONStorage, persist} from "zustand/middleware";
-import {demoNotes, demoTransactions} from "@/lib/mock-data";
-import {createHex} from "@/lib/utils";
-import type {AppMode, Note, RelayerHealth, TransactionRecord, TransactionStatus} from "@/lib/types";
+import {TOKENS} from "@/lib/constants";
+import type {AppMode, Note, RelayerHealth, TokenDefinition, TransactionRecord, TransactionStatus} from "@/lib/types";
 
 type ShieldedState = {
   spendingKey: string;
   viewingKey: string;
+  viewingPub: `0x${string}` | null;
+  ownerPk: string;
+  walletAddress: `0x${string}` | null;
+  chainId: number | null;
+  tokens: TokenDefinition[];
   notes: Note[];
   nullifiers: string[];
   mode: AppMode;
@@ -18,6 +22,17 @@ type ShieldedState = {
   relayerHealth: RelayerHealth;
   setMode: (mode: AppMode) => void;
   setRevealBalances: (value: boolean) => void;
+  setTokens: (tokens: TokenDefinition[]) => void;
+  setWalletConnection: (walletAddress: `0x${string}` | null, chainId: number | null) => void;
+  setKeyMaterial: (keys: {
+    spendingKey: string;
+    viewingKey: string;
+    viewingPub: `0x${string}`;
+    ownerPk: string;
+    walletAddress: `0x${string}`;
+  }) => void;
+  clearKeyMaterial: () => void;
+  setNotes: (notes: Note[]) => void;
   setLastSyncedBlock: (block: number) => void;
   setRelayerHealth: (health: RelayerHealth) => void;
   addNote: (note: Note) => void;
@@ -29,16 +44,19 @@ type ShieldedState = {
 export const useShieldedStore = create<ShieldedState>()(
   persist(
     (set) => ({
-      spendingKey: createHex("spending-key"),
-      viewingKey: createHex("viewing-key"),
-      notes: demoNotes,
-      nullifiers: demoNotes
-        .map((note) => note.nullifier)
-        .filter((value) => typeof value === "string") as string[],
+      spendingKey: "",
+      viewingKey: "",
+      viewingPub: null,
+      ownerPk: "",
+      walletAddress: null,
+      chainId: null,
+      tokens: TOKENS,
+      notes: [],
+      nullifiers: [],
       mode: "pool",
       lastSyncedBlock: 21420391,
       revealBalances: false,
-      transactions: demoTransactions,
+      transactions: [],
       relayerHealth: {
         ok: true,
         latencyMs: 82,
@@ -46,6 +64,24 @@ export const useShieldedStore = create<ShieldedState>()(
       },
       setMode: (mode) => set({mode}),
       setRevealBalances: (revealBalances) => set({revealBalances}),
+      setTokens: (tokens) => set({tokens}),
+      setWalletConnection: (walletAddress, chainId) => set({walletAddress, chainId}),
+      setKeyMaterial: (keys) =>
+        set({
+          spendingKey: keys.spendingKey,
+          viewingKey: keys.viewingKey,
+          viewingPub: keys.viewingPub,
+          ownerPk: keys.ownerPk,
+          walletAddress: keys.walletAddress,
+        }),
+      clearKeyMaterial: () =>
+        set({
+          spendingKey: "",
+          viewingKey: "",
+          viewingPub: null,
+          ownerPk: "",
+        }),
+      setNotes: (notes) => set({notes}),
       setLastSyncedBlock: (lastSyncedBlock) => set({lastSyncedBlock}),
       setRelayerHealth: (relayerHealth) => set({relayerHealth}),
       addNote: (note) =>
@@ -98,6 +134,11 @@ export const useShieldedStore = create<ShieldedState>()(
       partialize: (state) => ({
         spendingKey: state.spendingKey,
         viewingKey: state.viewingKey,
+        viewingPub: state.viewingPub,
+        ownerPk: state.ownerPk,
+        walletAddress: state.walletAddress,
+        chainId: state.chainId,
+        tokens: state.tokens,
         notes: state.notes,
         nullifiers: state.nullifiers,
         mode: state.mode,

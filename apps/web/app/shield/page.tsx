@@ -1,7 +1,8 @@
 "use client";
 
 import {Copy, ShieldCheck} from "lucide-react";
-import {useMemo, useState} from "react";
+import {ethers} from "ethers";
+import {useState} from "react";
 import {PageShell} from "@/components/layout/page-shell";
 import {AmountInput} from "@/components/ui/amount-input";
 import {ActionOutcomeCard} from "@/components/ui/action-outcome-card";
@@ -10,42 +11,58 @@ import {HashDisplay} from "@/components/ui/hash-display";
 import {PrivacyWarning} from "@/components/ui/privacy-warning";
 import {SelectField} from "@/components/ui/select-field";
 import {TOKENS} from "@/lib/constants";
-import {createHex, copyText, formatAmount, getAmountValidationMessage, nowIso} from "@/lib/utils";
+import {shieldDeposit} from "@/lib/shielded-integration";
+import {getBrowserSigner} from "@/lib/web3";
+import {copyText, formatAmount, getAmountValidationMessage, nowIso} from "@/lib/utils";
 import {useShieldedStore} from "@/store/use-shielded-store";
 
 export default function ShieldPage() {
+  const address = useShieldedStore((state) => state.walletAddress);
   const addNote = useShieldedStore((state) => state.addNote);
   const upsertTransaction = useShieldedStore((state) => state.upsertTransaction);
+  const availableTokens = useShieldedStore((state) => state.tokens);
+  const ownerPk = useShieldedStore((state) => state.ownerPk);
+  const viewingPub = useShieldedStore((state) => state.viewingPub);
+  const tokenOptions = availableTokens.length > 0 ? availableTokens : TOKENS;
 
-  const [token, setToken] = useState(TOKENS[0].symbol);
+  const [token, setToken] = useState(tokenOptions[0].symbol);
   const [amount, setAmount] = useState("100.000000");
   const [submitting, setSubmitting] = useState(false);
   const [successNote, setSuccessNote] = useState<`0x${string}` | null>(null);
   const [successTxHash, setSuccessTxHash] = useState<`0x${string}` | null>(null);
   const amountError = getAmountValidationMessage(amount, Number.MAX_SAFE_INTEGER, 6);
 
-  const commitment = useMemo(
-    () => createHex(`${token}-${amount}-commitment`),
-    [token, amount]
-  );
+  const tokenMeta = tokenOptions.find((t) => t.symbol === token) ?? tokenOptions[0];
 
   async function handleSubmit() {
+    if (!address) {
+      return;
+    }
+    if (!ownerPk || !viewingPub) {
+      return;
+    }
     setSubmitting(true);
-    const txHash = createHex("shield-tx");
-    const encryptedNote = createHex("shielded-note");
-    const noteId = crypto.randomUUID();
-
-    window.setTimeout(() => {
+    try {
+      const noteId = crypto.randomUUID();
+      const signer = await getBrowserSigner(address);
+      const parsedAmount = ethers.parseUnits(amount || "0", tokenMeta.decimals);
+      const result = await shieldDeposit({
+        signer,
+        ownerPk: BigInt(ownerPk),
+        viewingPub,
+        tokenAddress: tokenMeta.contractAddress,
+        amount: parsedAmount,
+      });
       addNote({
         id: noteId,
         token,
         amount: Number(amount || 0).toFixed(6),
         status: "unspent",
-        commitment,
-        encryptedNote,
+        commitment: result.commitment,
+        encryptedNote: result.encryptedNote,
         discoveredAt: nowIso(),
         source: "shield",
-        txHash,
+        txHash: result.txHash,
       });
       upsertTransaction({
         id: noteId,
@@ -54,12 +71,13 @@ export default function ShieldPage() {
         amount: Number(amount || 0).toFixed(6),
         createdAt: nowIso(),
         status: "confirmed",
-        txHash,
+        txHash: result.txHash,
       });
-      setSuccessNote(encryptedNote);
-      setSuccessTxHash(txHash);
+      setSuccessNote(result.encryptedNote);
+      setSuccessTxHash(result.txHash);
+    } finally {
       setSubmitting(false);
-    }, 1300);
+    }
   }
 
   return (
@@ -76,7 +94,7 @@ export default function ShieldPage() {
               <label className="space-y-2">
                 <span className="text-sm text-[#6b7280]">Token</span>
                 <SelectField value={token} onChange={(event) => setToken(event.target.value)}>
-                  {TOKENS.map((item) => (
+                  {tokenOptions.map((item) => (
                     <option key={item.symbol} value={item.symbol}>
                       {item.name}
                     </option>
@@ -88,14 +106,16 @@ export default function ShieldPage() {
                 <AmountInput value={amount} onChange={setAmount} />
                 {amountError ? <p className="text-xs text-amber-300">{amountError}</p> : null}
               </label>
-              <div className="surface-subtle rounded-[26px] p-5">
+              {ownerPk ? (
+                <div className="surface-subtle rounded-[26px] p-5">
                   <p className="hero-kicker font-mono text-xs uppercase text-[#9ca3af]">
-                  Commitment Preview
-                </p>
-                <div className="mt-4">
-                  <HashDisplay value={commitment} />
+                    Receiver owner_pk
+                  </p>
+                  <div className="mt-4">
+                    <HashDisplay value={`0x${BigInt(ownerPk).toString(16).padStart(64, "0")}`} />
+                  </div>
                 </div>
-              </div>
+              ) : null}
             </div>
             <Button className="rounded-2xl" onClick={handleSubmit} disabled={submitting || Boolean(amountError)} icon={<ShieldCheck className="size-4" />}>
               {submitting ? "Registering note..." : "Shield via wallet"}

@@ -1,6 +1,7 @@
 "use client";
 
 import {LogOut} from "lucide-react";
+import {ethers} from "ethers";
 import {useMemo, useState} from "react";
 import {NoteCard} from "@/components/notes/note-card";
 import {PageShell} from "@/components/layout/page-shell";
@@ -10,7 +11,6 @@ import {Button} from "@/components/ui/button";
 import {InputField} from "@/components/ui/input-field";
 import {PrivacyWarning} from "@/components/ui/privacy-warning";
 import {StatusBadge} from "@/components/ui/status-badge";
-import {simulateProofFlow, submitRelayerPayload} from "@/lib/protocol";
 import {createHex, formatAmount, isValidHexAddress, nowIso} from "@/lib/utils";
 import {useShieldedStore} from "@/store/use-shielded-store";
 import type {ProofStep, TransactionStatus} from "@/lib/types";
@@ -20,6 +20,10 @@ export default function UnshieldPage() {
   const markNoteSpent = useShieldedStore((state) => state.markNoteSpent);
   const upsertTransaction = useShieldedStore((state) => state.upsertTransaction);
   const updateTransactionStatus = useShieldedStore((state) => state.updateTransactionStatus);
+  const spendingKey = useShieldedStore((state) => state.spendingKey);
+  const ownerPk = useShieldedStore((state) => state.ownerPk);
+  const viewingKey = useShieldedStore((state) => state.viewingKey);
+  const viewingPub = useShieldedStore((state) => state.viewingPub);
 
   const [recipient, setRecipient] = useState("0x8f3CF7ad23Cd3CaDbD9735AFf958023239c6A063");
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
@@ -39,6 +43,7 @@ export default function UnshieldPage() {
 
   async function handleUnshield() {
     if (!selectedNote) return;
+    if (!spendingKey || !ownerPk || !viewingKey || !viewingPub) return;
     setLoading(true);
     setStatus("pending");
     const transactionId = crypto.randomUUID();
@@ -52,16 +57,26 @@ export default function UnshieldPage() {
       counterparty: recipient as `0x${string}`,
     });
 
-    await simulateProofFlow((step, eta) => {
-      setProofStep(step);
-      setEtaSeconds(eta);
-      if (step === "submit") {
-        setStatus("submitted");
-        updateTransactionStatus(transactionId, "submitted");
-      }
+    setProofStep("proof");
+    setEtaSeconds(12);
+    const {executeUnshield} = await import("@/lib/private-transfer");
+    const response = await executeUnshield({
+      relayerUrl: process.env.NEXT_PUBLIC_RELAYER_URL ?? "http://127.0.0.1:8787",
+      senderSpendingKey: BigInt(spendingKey),
+      senderViewingPriv: BigInt(viewingKey),
+      senderViewingPub: viewingPub as `0x${string}`,
+      senderOwnerPk: BigInt(ownerPk),
+      recipientAddress: recipient as `0x${string}`,
+      amount: ethers.parseUnits(selectedNote.amount, 18),
+      onStatus: (msg) => {
+        if (msg.toLowerCase().includes("generating")) setProofStep("proof");
+        if (msg.toLowerCase().includes("relayer")) {
+          setProofStep("submit");
+          setStatus("submitted");
+          updateTransactionStatus(transactionId, "submitted");
+        }
+      },
     });
-
-    const response = await submitRelayerPayload("unshield");
     setRequestId(response.requestId);
     setConfirmedHash(response.txHash);
     markNoteSpent(selectedNote.id, createHex(`nullifier-${selectedNote.id}`));

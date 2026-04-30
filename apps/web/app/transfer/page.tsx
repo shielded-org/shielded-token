@@ -1,6 +1,7 @@
 "use client";
 
 import {ArrowRightLeft} from "lucide-react";
+import {ethers} from "ethers";
 import {useMemo, useState} from "react";
 import {NoteCard} from "@/components/notes/note-card";
 import {PageShell} from "@/components/layout/page-shell";
@@ -10,7 +11,7 @@ import {AmountInput} from "@/components/ui/amount-input";
 import {Button} from "@/components/ui/button";
 import {InputField} from "@/components/ui/input-field";
 import {SelectField} from "@/components/ui/select-field";
-import {simulateProofFlow, submitRelayerPayload} from "@/lib/protocol";
+import {decodeShieldedAddress} from "@/lib/shielded-address";
 import {TOKENS} from "@/lib/constants";
 import {createHex, formatAmount, getAmountValidationMessage, isValidViewingKey, nowIso} from "@/lib/utils";
 import {useShieldedStore} from "@/store/use-shielded-store";
@@ -22,9 +23,15 @@ export default function TransferPage() {
   const markNoteSpent = useShieldedStore((state) => state.markNoteSpent);
   const upsertTransaction = useShieldedStore((state) => state.upsertTransaction);
   const updateTransactionStatus = useShieldedStore((state) => state.updateTransactionStatus);
+  const spendingKey = useShieldedStore((state) => state.spendingKey);
+  const ownerPk = useShieldedStore((state) => state.ownerPk);
+  const viewingKey = useShieldedStore((state) => state.viewingKey);
+  const viewingPub = useShieldedStore((state) => state.viewingPub);
+  const availableTokens = useShieldedStore((state) => state.tokens);
+  const tokenOptions = availableTokens.length > 0 ? availableTokens : TOKENS;
 
-  const [recipient, setRecipient] = useState("0xRecipientViewingPublicKey");
-  const [token, setToken] = useState("sUSD");
+  const [recipient, setRecipient] = useState("");
+  const [token, setToken] = useState(tokenOptions[0].symbol);
   const [amount, setAmount] = useState("90.000000");
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [proofStep, setProofStep] = useState<ProofStep>("witness");
@@ -41,11 +48,16 @@ export default function TransferPage() {
   const selectedNote =
     candidateNotes.find((note) => note.id === selectedNoteId) ?? candidateNotes[0];
   const changeAmount = Math.max(0, Number(selectedNote?.amount ?? 0) - Number(amount || 0));
-  const recipientError = isValidViewingKey(recipient) ? null : "Enter a valid recipient viewing key (hex format).";
+  const recipientError = recipient.startsWith("shd_")
+    ? null
+    : isValidViewingKey(recipient)
+      ? null
+      : "Enter a valid shielded address or viewing key.";
   const amountError = getAmountValidationMessage(amount, Number(selectedNote?.amount ?? 0), 6);
 
   async function handleTransfer() {
     if (!selectedNote) return;
+    if (!spendingKey || !ownerPk || !viewingKey || !viewingPub) return;
     setLoading(true);
     setRelayerStatus("pending");
 
@@ -60,16 +72,32 @@ export default function TransferPage() {
       counterparty: recipient as `0x${string}`,
     });
 
-    await simulateProofFlow((step, eta) => {
-      setProofStep(step);
-      setEtaSeconds(eta);
-      if (step === "submit") {
-        setRelayerStatus("submitted");
-        updateTransactionStatus(transactionId, "submitted");
-      }
+    setProofStep("proof");
+    setEtaSeconds(12);
+    const recipientKeys = recipient.startsWith("shd_")
+      ? decodeShieldedAddress(recipient)
+      : {ownerPk: BigInt(ownerPk), viewingPub: recipient as `0x${string}`};
+    const {executePrivateTransfer} = await import("@/lib/private-transfer");
+    const relayerResponse = await executePrivateTransfer({
+      relayerUrl: process.env.NEXT_PUBLIC_RELAYER_URL ?? "http://127.0.0.1:8787",
+      senderSpendingKey: BigInt(spendingKey),
+      senderOwnerPk: BigInt(ownerPk),
+      senderViewingPriv: BigInt(viewingKey),
+      senderViewingPub: viewingPub as `0x${string}`,
+      recipientOwnerPk: recipientKeys.ownerPk,
+      recipientViewingPub: recipientKeys.viewingPub,
+      maxRecipientAmount: ethers.parseUnits(amount || "0", 18),
+      onStatus: (msg) => {
+        if (msg.toLowerCase().includes("generating proof")) setProofStep("proof");
+        if (msg.toLowerCase().includes("submitting")) {
+          setProofStep("submit");
+          setRelayerStatus("submitted");
+          updateTransactionStatus(transactionId, "submitted");
+        }
+      },
     });
-
-    const relayerResponse = await submitRelayerPayload("transfer");
+    setProofStep("confirm");
+    setEtaSeconds(4);
     setRequestId(relayerResponse.requestId);
     setConfirmedHash(relayerResponse.txHash);
     setRelayerStatus("confirmed");
@@ -127,7 +155,7 @@ export default function TransferPage() {
                 <label className="space-y-2">
                   <span className="text-sm text-[#6b7280]">Token</span>
                   <SelectField value={token} onChange={(event) => setToken(event.target.value)}>
-                    {TOKENS.map((item) => (
+                    {tokenOptions.map((item) => (
                       <option key={item.symbol} value={item.symbol}>
                         {item.name}
                       </option>

@@ -12,6 +12,8 @@ import {useShieldedStore} from "@/store/use-shielded-store";
 
 export default function DashboardPage() {
   const notes = useShieldedStore((state) => state.notes);
+  const availableTokens = useShieldedStore((state) => state.tokens);
+  const tokenOptions = availableTokens.length > 0 ? availableTokens : TOKENS;
   const revealBalances = useShieldedStore((state) => state.revealBalances);
   const setRevealBalances = useShieldedStore((state) => state.setRevealBalances);
   const transactions = useShieldedStore((state) => state.transactions);
@@ -82,7 +84,7 @@ export default function DashboardPage() {
             </Link>
           </div>
           <div className="mt-6 grid gap-3">
-            {TOKENS.map((token) => {
+            {tokenOptions.map((token) => {
               const tokenNotes = notes.filter((note) => note.token === token.symbol);
               return (
                 <article

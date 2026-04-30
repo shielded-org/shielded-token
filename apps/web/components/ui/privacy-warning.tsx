@@ -8,15 +8,15 @@ export function PrivacyWarning({
   variant?: "info" | "warning" | "critical";
 }) {
   const variantClasses = {
-    info: "border-[#0047ab]/20 bg-[#0047ab]/10 text-[#c8daff]",
-    warning: "border-amber-400/18 bg-[linear-gradient(180deg,rgba(251,191,36,0.12),rgba(251,191,36,0.05))] text-amber-100",
-    critical: "border-red-400/20 bg-red-500/10 text-red-100",
+    info: "border-[#93c5fd] bg-[#eff6ff] text-[#1e3a8a]",
+    warning: "border-amber-300 bg-[#fffbeb] text-[#92400e]",
+    critical: "border-red-300 bg-red-50 text-red-800",
   };
 
   const iconClasses = {
-    info: "text-[#4d7fd6]",
-    warning: "text-amber-400",
-    critical: "text-red-400",
+    info: "text-[#2563eb]",
+    warning: "text-amber-600",
+    critical: "text-red-600",
   };
 
   return (

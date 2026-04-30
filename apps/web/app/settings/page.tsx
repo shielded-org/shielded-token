@@ -4,7 +4,8 @@ import {Check, Copy, Eye, EyeOff} from "lucide-react";
 import {useMemo, useState} from "react";
 import {PageShell} from "@/components/layout/page-shell";
 import {Button} from "@/components/ui/button";
-import {deriveShieldedAccountPreview} from "@/lib/shielded-account";
+import {encodeShieldedAddress} from "@/lib/shielded-address";
+import {SEPOLIA} from "@/lib/shielded-config";
 import {copyText} from "@/lib/utils";
 import {useShieldedStore} from "@/store/use-shielded-store";
 
@@ -42,12 +43,27 @@ function KeyRow({
 export default function SettingsPage() {
   const spendingKey = useShieldedStore((state) => state.spendingKey);
   const viewingKey = useShieldedStore((state) => state.viewingKey);
+  const viewingPub = useShieldedStore((state) => state.viewingPub);
+  const ownerPk = useShieldedStore((state) => state.ownerPk);
   const [showKeys, setShowKeys] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
   const accountPreview = useMemo(
-    () => deriveShieldedAccountPreview(spendingKey, viewingKey),
-    [spendingKey, viewingKey]
+    () => ({
+      shieldedAddress:
+        viewingPub && ownerPk
+          ? encodeShieldedAddress({
+              ownerPk: BigInt(ownerPk),
+              viewingPub,
+              chainId: SEPOLIA.chainId,
+            })
+          : "-",
+      ownerPublicKey: ownerPk || "-",
+      viewingPublicKey: viewingPub || "-",
+      ownerPrivateKey: spendingKey || "-",
+      viewingPrivateKey: viewingKey || "-",
+    }),
+    [ownerPk, spendingKey, viewingKey, viewingPub]
   );
 
   async function handleCopy(label: string, value: string) {
