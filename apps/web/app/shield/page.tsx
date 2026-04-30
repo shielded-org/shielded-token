@@ -106,16 +106,6 @@ export default function ShieldPage() {
                 <AmountInput value={amount} onChange={setAmount} />
                 {amountError ? <p className="text-xs text-amber-300">{amountError}</p> : null}
               </label>
-              {ownerPk ? (
-                <div className="surface-subtle rounded-[26px] p-5">
-                  <p className="hero-kicker font-mono text-xs uppercase text-[#9ca3af]">
-                    Receiver owner_pk
-                  </p>
-                  <div className="mt-4">
-                    <HashDisplay value={`0x${BigInt(ownerPk).toString(16).padStart(64, "0")}`} />
-                  </div>
-                </div>
-              ) : null}
             </div>
             <Button className="rounded-2xl" onClick={handleSubmit} disabled={submitting || Boolean(amountError)} icon={<ShieldCheck className="size-4" />}>
               {submitting ? "Registering note..." : "Shield via wallet"}

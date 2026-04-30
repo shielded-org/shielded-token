@@ -4,6 +4,7 @@ import {ethers} from "ethers";
 import {CONTRACTS, ERC20_ABI, POOL_ABI, POOL_DEPLOY_BLOCK, POSEIDON_ABI, SEPOLIA} from "./shielded-config";
 import {deriveOwnerPk, deriveUserKeys, keySeedFromWalletSignature, viewingPrivToPub} from "./keys";
 import {scanShieldedNotes, type DecryptedNote} from "./shielded";
+import type {TokenDefinition} from "./types";
 
 function toHex32(v: bigint): `0x${string}` {
   return ethers.zeroPadValue(ethers.toBeHex(v), 32) as `0x${string}`;
@@ -46,6 +47,34 @@ export async function scanPrivateState(viewingPriv: bigint, viewingPub: `0x${str
     viewingPriv,
     viewingPub,
   });
+}
+
+export type ResolvedNoteState = DecryptedNote & {
+  nullifier?: `0x${string}`;
+  isSpent: boolean;
+};
+
+async function poseidonHash2(poseidon: ethers.Contract, a: bigint, b: bigint): Promise<`0x${string}`> {
+  const out = await poseidon.hash_2(a, b);
+  return toHex32(BigInt(out.toString()));
+}
+
+export async function resolveNoteStates(notes: DecryptedNote[], spendingKey: bigint) {
+  const provider = new ethers.JsonRpcProvider(SEPOLIA.rpcUrl, SEPOLIA.chainId);
+  const poseidon = new ethers.Contract(CONTRACTS.poseidon, POSEIDON_ABI, provider);
+  const pool = new ethers.Contract(CONTRACTS.pool, POOL_ABI, provider);
+
+  return Promise.all(
+    notes.map(async (note) => {
+      const nullifier = await poseidonHash2(poseidon, spendingKey, BigInt(note.commitment));
+      const isSpent = await pool.nullifierSet(nullifier);
+      return {
+        ...note,
+        nullifier,
+        isSpent: Boolean(isSpent),
+      } satisfies ResolvedNoteState;
+    })
+  );
 }
 
 export async function shieldDeposit(params: {
@@ -103,16 +132,40 @@ async function encryptNoteECDH(note: object, recipientViewingPubHex: `0x${string
   return ethers.hexlify(ethers.toUtf8Bytes(JSON.stringify(envelope))) as `0x${string}`;
 }
 
-export function mapNotesToUi(notes: DecryptedNote[]) {
-  return notes.map((n, idx) => ({
-    id: `${n.commitment}-${idx}`,
-    token: "sUSD",
-    amount: ethers.formatUnits(n.amount, 18),
-    status: "unspent" as const,
-    commitment: n.commitment,
-    encryptedNote: "0x" as `0x${string}`,
-    discoveredAt: new Date().toISOString(),
-    source: "shield" as const,
-    txHash: n.txHash,
-  }));
+function normalizeTokenField(tokenLike: string): string | null {
+  try {
+    return ethers.zeroPadValue(tokenLike as `0x${string}`, 32).toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+function fallbackTokenLabel(tokenField: `0x${string}`) {
+  const compact = tokenField.slice(-8).toUpperCase();
+  return `TOKEN-${compact}`;
+}
+
+export function mapNotesToUi(notes: ResolvedNoteState[], tokens: TokenDefinition[]) {
+  const tokenByField = new Map<string, TokenDefinition>();
+  for (const token of tokens) {
+    tokenByField.set(ethers.zeroPadValue(token.contractAddress, 32).toLowerCase(), token);
+  }
+
+  return notes.map((n, idx) => {
+    const normalizedField = normalizeTokenField(n.token);
+    const tokenMeta = normalizedField ? tokenByField.get(normalizedField) : undefined;
+
+    return {
+      id: `${n.commitment}-${idx}`,
+      token: tokenMeta?.symbol ?? fallbackTokenLabel(n.token),
+      amount: ethers.formatUnits(n.amount, tokenMeta?.decimals ?? 18),
+      status: n.isSpent ? ("spent" as const) : ("unspent" as const),
+      commitment: n.commitment,
+      nullifier: n.nullifier,
+      encryptedNote: "0x" as `0x${string}`,
+      discoveredAt: new Date().toISOString(),
+      source: "shield" as const,
+      txHash: n.txHash,
+    };
+  });
 }

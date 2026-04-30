@@ -7,7 +7,7 @@ import {ethers} from "ethers";
 import {useEffect, useState} from "react";
 import {WalletConnection} from "@/components/wallet/wallet-connection";
 import {NAV_ITEMS, RELAYER_URL, TOKENS} from "@/lib/constants";
-import {deriveShieldedKeysFromWallet, mapNotesToUi, scanPrivateState} from "@/lib/shielded-integration";
+import {deriveShieldedKeysFromWallet, mapNotesToUi, resolveNoteStates, scanPrivateState} from "@/lib/shielded-integration";
 import {ERC20_ABI, SEPOLIA} from "@/lib/shielded-config";
 import {cn} from "@/lib/utils";
 import {getActiveInjectedProvider} from "@/lib/injected-wallet";
@@ -17,8 +17,12 @@ export function AppShell({children}: {children: React.ReactNode}) {
   const pathname = usePathname();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const address = useShieldedStore((state) => state.walletAddress);
+  const keyMaterialAddress = useShieldedStore((state) => state.keyMaterialAddress);
   const viewingPub = useShieldedStore((state) => state.viewingPub);
   const viewingKey = useShieldedStore((state) => state.viewingKey);
+  const spendingKey = useShieldedStore((state) => state.spendingKey);
+  const ownerPk = useShieldedStore((state) => state.ownerPk);
+  const tokens = useShieldedStore((state) => state.tokens);
   const lastSyncedBlock = useShieldedStore((state) => state.lastSyncedBlock);
   const setRelayerHealth = useShieldedStore((state) => state.setRelayerHealth);
   const setLastSyncedBlock = useShieldedStore((state) => state.setLastSyncedBlock);
@@ -60,6 +64,10 @@ export function AppShell({children}: {children: React.ReactNode}) {
 
   useEffect(() => {
     if (!address) return;
+    const hasCachedKeys =
+      keyMaterialAddress?.toLowerCase() === address.toLowerCase() &&
+      Boolean(spendingKey && viewingKey && viewingPub && ownerPk);
+    if (hasCachedKeys) return;
     let cancelled = false;
     async function syncKeys() {
       try {
@@ -79,7 +87,7 @@ export function AppShell({children}: {children: React.ReactNode}) {
           viewingKey: keys.viewingPriv.toString(),
           viewingPub: keys.viewingPub,
           ownerPk: keys.ownerPk.toString(),
-          walletAddress: address as `0x${string}`,
+          keyMaterialAddress: address as `0x${string}`,
         });
       } catch {
         // user may reject signature prompt
@@ -89,7 +97,7 @@ export function AppShell({children}: {children: React.ReactNode}) {
     return () => {
       cancelled = true;
     };
-  }, [address, setKeyMaterial]);
+  }, [address, keyMaterialAddress, ownerPk, setKeyMaterial, spendingKey, viewingKey, viewingPub]);
 
   useEffect(() => {
     let cancelled = false;
@@ -125,15 +133,16 @@ export function AppShell({children}: {children: React.ReactNode}) {
   }, [setTokens]);
 
   useEffect(() => {
-    if (!viewingPub || !viewingKey) return;
+    if (!viewingPub || !viewingKey || !spendingKey) return;
     const activeViewingPub = viewingPub;
     let cancelled = false;
     async function syncNotes() {
       try {
         const scan = await scanPrivateState(BigInt(viewingKey), activeViewingPub);
+        const resolvedNotes = await resolveNoteStates(scan.notes, BigInt(spendingKey));
         if (cancelled) return;
         setLastSyncedBlock(scan.stats.latestBlock);
-        setNotes(mapNotesToUi(scan.notes));
+        setNotes(mapNotesToUi(resolvedNotes, tokens));
       } catch {
         // keep previous state
       }
@@ -146,7 +155,7 @@ export function AppShell({children}: {children: React.ReactNode}) {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [setLastSyncedBlock, setNotes, viewingKey, viewingPub]);
+  }, [setLastSyncedBlock, setNotes, spendingKey, tokens, viewingKey, viewingPub]);
 
   return (
     <div className="min-h-screen bg-[#f3f4f6] text-[#111827]">

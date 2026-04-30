@@ -10,6 +10,7 @@ type ShieldedState = {
   viewingKey: string;
   viewingPub: `0x${string}` | null;
   ownerPk: string;
+  keyMaterialAddress: `0x${string}` | null;
   walletAddress: `0x${string}` | null;
   chainId: number | null;
   tokens: TokenDefinition[];
@@ -29,7 +30,7 @@ type ShieldedState = {
     viewingKey: string;
     viewingPub: `0x${string}`;
     ownerPk: string;
-    walletAddress: `0x${string}`;
+    keyMaterialAddress: `0x${string}`;
   }) => void;
   clearKeyMaterial: () => void;
   setNotes: (notes: Note[]) => void;
@@ -48,6 +49,7 @@ export const useShieldedStore = create<ShieldedState>()(
       viewingKey: "",
       viewingPub: null,
       ownerPk: "",
+      keyMaterialAddress: null,
       walletAddress: null,
       chainId: null,
       tokens: TOKENS,
@@ -72,7 +74,7 @@ export const useShieldedStore = create<ShieldedState>()(
           viewingKey: keys.viewingKey,
           viewingPub: keys.viewingPub,
           ownerPk: keys.ownerPk,
-          walletAddress: keys.walletAddress,
+          keyMaterialAddress: keys.keyMaterialAddress,
         }),
       clearKeyMaterial: () =>
         set({
@@ -80,6 +82,7 @@ export const useShieldedStore = create<ShieldedState>()(
           viewingKey: "",
           viewingPub: null,
           ownerPk: "",
+          keyMaterialAddress: null,
         }),
       setNotes: (notes) => set({notes}),
       setLastSyncedBlock: (lastSyncedBlock) => set({lastSyncedBlock}),
@@ -136,6 +139,7 @@ export const useShieldedStore = create<ShieldedState>()(
         viewingKey: state.viewingKey,
         viewingPub: state.viewingPub,
         ownerPk: state.ownerPk,
+        keyMaterialAddress: state.keyMaterialAddress,
         walletAddress: state.walletAddress,
         chainId: state.chainId,
         tokens: state.tokens,
