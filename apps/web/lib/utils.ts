@@ -10,12 +10,22 @@ export function shortenHash(value: string, start = 6, end = 4) {
   return `${value.slice(0, start)}...${value.slice(-end)}`;
 }
 
-export function formatAmount(value: string | number, decimals = 6) {
+export function formatAmount(value: string | number, decimals = 2) {
   const numeric = typeof value === "number" ? value : Number(value || 0);
   return numeric.toLocaleString(undefined, {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
   });
+}
+
+/** Format a number as USD for dashboard demo peg displays */
+export function formatUsd(amount: number): string {
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
 }
 
 export function createHex(seed: string) {

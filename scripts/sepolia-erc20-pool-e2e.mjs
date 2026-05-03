@@ -674,7 +674,7 @@ async function main() {
         loadForgeArtifact("MockERC20.sol/MockERC20.json").bytecode.object,
         signer
       );
-      const mockToken = await erc20Factory.deploy();
+      const mockToken = await erc20Factory.deploy("Mock Token", "MOCK", 18);
       await mockToken.waitForDeployment();
       tokenAddress = await mockToken.getAddress();
       const mockRW = new ethers.Contract(tokenAddress, ERC20_ABI, signer);
@@ -759,6 +759,7 @@ async function main() {
             verifyContractOnEtherscan({
               address: tokenAddress,
               contractId: "src/MockERC20.sol:MockERC20",
+              constructorArgs: encodeConstructorArgs(["string", "string", "uint8"], ["Mock Token", "MOCK", 18]),
             });
           }
         } catch (err) {

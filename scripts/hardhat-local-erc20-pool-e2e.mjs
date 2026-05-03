@@ -619,7 +619,7 @@ async function main() {
     loadForgeArtifact("MockERC20.sol/MockERC20.json").bytecode.object,
     signer
   );
-  const mockToken = await erc20Factory.deploy();
+  const mockToken = await erc20Factory.deploy("Mock Token", "MOCK", 18);
   await mockToken.waitForDeployment();
   const mockTokenAddress = await mockToken.getAddress();
   const mockRW = new ethers.Contract(mockTokenAddress, ERC20_ABI, signer);

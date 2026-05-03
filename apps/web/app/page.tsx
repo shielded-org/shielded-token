@@ -9,7 +9,14 @@ import {StatusBadge} from "@/components/ui/status-badge";
 import {TOKENS} from "@/lib/constants";
 import {encodeShieldedAddress} from "@/lib/shielded-address";
 import {SEPOLIA} from "@/lib/shielded-config";
-import {formatAmount, getShieldedBalance, getTokenTotal, relativeTime, sortTransactions} from "@/lib/utils";
+import {
+  formatAmount,
+  formatUsd,
+  getShieldedBalance,
+  getTokenTotal,
+  relativeTime,
+  sortTransactions,
+} from "@/lib/utils";
 import {useShieldedStore} from "@/store/use-shielded-store";
 
 export default function DashboardPage() {
@@ -52,7 +59,7 @@ export default function DashboardPage() {
                 <>
                   <div className="mt-5 flex items-center gap-3">
                     <h2 className="font-mono text-5xl text-[#111827] sm:text-6xl">
-                      {revealBalances ? formatAmount(totalBalance) : "••••••"}
+                      $ {revealBalances ? formatAmount(totalBalance) : "••••••"}
                     </h2>
                     <button
                       type="button"
@@ -137,6 +144,7 @@ export default function DashboardPage() {
             <div className="mt-6 grid gap-3">
               {tokenOptions.map((token) => {
                 const tokenNotes = notes.filter((note) => note.token === token.symbol);
+                const tokenTotal = getTokenTotal(notes, token.symbol);
                 return (
                   <article
                     key={token.symbol}
@@ -154,9 +162,14 @@ export default function DashboardPage() {
                       </div>
                       <div className="text-right">
                         <p className="font-mono text-lg text-[#111827]">
-                          {revealBalances ? formatAmount(getTokenTotal(notes, token.symbol)) : "••••••"}
+                          {revealBalances ? formatAmount(tokenTotal) : "••••••"}
                         </p>
-                        <p className="text-xs text-[#9ca3af]">{tokenNotes.filter((note) => note.status === "unspent").length} unspent notes</p>
+                        {revealBalances ? (
+                          <p className="mt-1 text-sm tabular-nums text-[#374151]">{formatUsd(tokenTotal)}</p>
+                        ) : (
+                          <p className="mt-1 font-mono text-sm text-[#9ca3af]">••••••</p>
+                        )}
+                        <p className="mt-1 text-xs text-[#9ca3af]">{tokenNotes.filter((note) => note.status === "unspent").length} unspent notes</p>
                       </div>
                     </div>
                   </article>

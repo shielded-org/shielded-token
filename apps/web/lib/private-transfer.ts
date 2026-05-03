@@ -230,8 +230,20 @@ export async function executeUnshield(params: {
   const note = candidates[0];
   const changeAmount = note.amount - params.amount;
   const changeBlinding = changeAmount > 0n ? (BigInt(ethers.randomBytes(31).reduce((a, b) => (a << 8n) + BigInt(b), 0n)) || 1n) : 0n;
-  const changeCommitment = changeAmount > 0n ? await noteCommitment(poseidon, params.senderOwnerPk, tokenField, changeAmount, changeBlinding) : ("0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`);
-  const changeNote = changeAmount > 0n ? await encryptNoteECDH({token: tokenField, amount: changeAmount.toString(), blinding: toHex32(changeBlinding), commitment: changeCommitment}, params.senderViewingPub) : ("0x" as `0x${string}`);
+  const changeCommitment = await noteCommitment(
+    poseidon,
+    params.senderOwnerPk,
+    tokenField,
+    changeAmount,
+    changeBlinding
+  );
+  const changeNote =
+    changeAmount > 0n
+      ? await encryptNoteECDH(
+          {token: tokenField, amount: changeAmount.toString(), blinding: toHex32(changeBlinding), commitment: changeCommitment},
+          params.senderViewingPub
+        )
+      : ("0x" as `0x${string}`);
   const changeRoute = routeForRecipient(params.senderViewingPub, 0);
   const nullifier = await poseidonHash2(poseidon, params.senderSpendingKey, BigInt(note.commitment));
   const merkle = await buildMerklePathForCommitment({provider, poseidonAddress: CONTRACTS.poseidon, merkleTreeAddress: CONTRACTS.merkleTree, targetCommitment: note.commitment});

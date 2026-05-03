@@ -13,6 +13,14 @@ export const CONTRACTS = {
   token: "0x9DBEd8AB4A05b5E4b6aF3bf61AA3051F6caa91b4",
 };
 
+/** Sepolia mock ERC20 batch — shown in token list alongside legacy CONTRACTS.token */
+export const DEFAULT_POOL_TOKENS = [
+  {address: "0x093856dc11cbEFeBb6c53E112F85E807D44ca9c2" as const, symbol: "USDC", decimals: 6},
+  {address: "0x70bdC729406Ee9C547522529f43F48028FCf374A" as const, symbol: "USDT", decimals: 6},
+  {address: "0xDc256389b94e511caEe10A75F1FE4246c185c288" as const, symbol: "DAI", decimals: 18},
+  {address: "0xFFBeF846263Af332CF34f7AC1F54aD09745c8c05" as const, symbol: "LINK", decimals: 18},
+] as const;
+
 export const POOL_DEPLOY_BLOCK = 10744004;
 
 export const POOL_ABI = [

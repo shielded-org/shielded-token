@@ -32,7 +32,7 @@ export default function TransferPage() {
 
   const [recipient, setRecipient] = useState("");
   const [token, setToken] = useState(tokenOptions[0].symbol);
-  const [amount, setAmount] = useState("90.000000");
+  const [amount, setAmount] = useState("90");
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [proofStep, setProofStep] = useState<ProofStep>("witness");
   const [etaSeconds, setEtaSeconds] = useState(18);
@@ -40,6 +40,11 @@ export default function TransferPage() {
   const [relayerStatus, setRelayerStatus] = useState<TransactionStatus>("pending");
   const [requestId, setRequestId] = useState<string | null>(null);
   const [confirmedHash, setConfirmedHash] = useState<`0x${string}` | null>(null);
+
+  const tokenMeta = useMemo(
+    () => tokenOptions.find((t) => t.symbol === token) ?? tokenOptions[0],
+    [tokenOptions, token]
+  );
 
   const candidateNotes = useMemo(
     () => notes.filter((note) => note.token === token && note.status === "unspent"),
@@ -53,7 +58,7 @@ export default function TransferPage() {
     : isValidViewingKey(recipient)
       ? null
       : "Enter a valid shielded address or viewing key.";
-  const amountError = getAmountValidationMessage(amount, Number(selectedNote?.amount ?? 0), 6);
+  const amountError = getAmountValidationMessage(amount, Number(selectedNote?.amount ?? 0), tokenMeta.decimals);
 
   async function handleTransfer() {
     if (!selectedNote) return;
@@ -86,7 +91,8 @@ export default function TransferPage() {
       senderViewingPub: viewingPub as `0x${string}`,
       recipientOwnerPk: recipientKeys.ownerPk,
       recipientViewingPub: recipientKeys.viewingPub,
-      maxRecipientAmount: ethers.parseUnits(amount || "0", 18),
+      tokenAddress: tokenMeta.contractAddress,
+      maxRecipientAmount: ethers.parseUnits(amount || "0", tokenMeta.decimals),
       onStatus: (msg) => {
         if (msg.toLowerCase().includes("generating proof")) setProofStep("proof");
         if (msg.toLowerCase().includes("submitting")) {
@@ -243,7 +249,7 @@ export default function TransferPage() {
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-[#9ca3af]">Change</span>
-                  <span className="font-mono text-[#111827]">{changeAmount.toFixed(6)} {token}</span>
+                  <span className="font-mono text-[#111827]">{formatAmount(changeAmount)} {token}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-[#9ca3af]">Status</span>

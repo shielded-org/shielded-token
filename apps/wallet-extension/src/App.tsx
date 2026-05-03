@@ -2,7 +2,7 @@ import {FormEvent, useEffect, useMemo, useRef, useState} from "react";
 import {ethers} from "ethers";
 import {Download, Lock} from "lucide-react";
 
-import {CONTRACTS, ERC20_ABI, POOL_ABI, POOL_DEPLOY_BLOCK, POSEIDON_ABI, SEPOLIA} from "./config";
+import {CONTRACTS, DEFAULT_POOL_TOKENS, ERC20_ABI, POOL_ABI, POOL_DEPLOY_BLOCK, POSEIDON_ABI, SEPOLIA} from "./config";
 import {deriveOwnerPk, deriveUserKeys, keySeedFromPrivateKey, viewingPrivToPub} from "./keys";
 import {executePrivateTransfer, executeUnshield} from "./privateTransfer";
 import {scanShieldedNotes} from "./shielded";
@@ -323,14 +323,16 @@ export default function App() {
 
   useEffect(() => {
     const imported = loadImportedTokens();
-    const merged = [
-      {
-        address: CONTRACTS.token as `0x${string}`,
-        symbol: "TOKEN",
-        decimals: 18,
-      },
-      ...imported.filter((t) => t.address.toLowerCase() !== CONTRACTS.token.toLowerCase()),
+    const canonical: ImportedToken[] = [
+      {address: CONTRACTS.token as `0x${string}`, symbol: "TOKEN", decimals: 18},
+      ...DEFAULT_POOL_TOKENS.map((t) => ({
+        address: t.address as `0x${string}`,
+        symbol: t.symbol,
+        decimals: t.decimals,
+      })),
     ];
+    const canonicalLower = new Set(canonical.map((t) => t.address.toLowerCase()));
+    const merged = [...canonical, ...imported.filter((t) => !canonicalLower.has(t.address.toLowerCase()))];
     setImportedTokens(merged);
     const vaultAccounts = listVaultAccountsMeta();
     setAccounts(vaultAccounts);
