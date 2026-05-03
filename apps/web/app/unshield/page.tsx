@@ -13,6 +13,7 @@ import {InputField} from "@/components/ui/input-field";
 import {PrivacyWarning} from "@/components/ui/privacy-warning";
 import {SegmentedControl} from "@/components/ui/segmented-control";
 import {StatusBadge} from "@/components/ui/status-badge";
+import {TOKENS} from "@/lib/constants";
 import {createHex, formatAmount, getAmountValidationMessage, isValidHexAddress, nowIso} from "@/lib/utils";
 import {useShieldedStore} from "@/store/use-shielded-store";
 import type {ProofStep, TransactionStatus} from "@/lib/types";
@@ -30,6 +31,8 @@ export default function UnshieldPage() {
   const viewingKey = useShieldedStore((state) => state.viewingKey);
   const viewingPub = useShieldedStore((state) => state.viewingPub);
   const walletAddress = useShieldedStore((state) => state.walletAddress);
+  const availableTokens = useShieldedStore((state) => state.tokens);
+  const tokenOptions = availableTokens.length > 0 ? availableTokens : TOKENS;
 
   const [recipientMode, setRecipientMode] = useState<RecipientMode>("self");
   const [recipient, setRecipient] = useState("");
@@ -47,6 +50,11 @@ export default function UnshieldPage() {
     [notes]
   );
   const selectedNote = unspentNotes.find((note) => note.id === selectedNoteId) ?? unspentNotes[0];
+  const selectedNoteMeta = useMemo(() => {
+    const sym = selectedNote?.token;
+    if (!sym) return tokenOptions[0];
+    return tokenOptions.find((t) => t.symbol === sym) ?? tokenOptions[0];
+  }, [selectedNote?.token, tokenOptions]);
   const resolvedRecipient = recipientMode === "self" ? walletAddress ?? "" : recipient.trim();
   const recipientError =
     recipientMode === "self"
@@ -56,7 +64,7 @@ export default function UnshieldPage() {
       : isValidHexAddress(resolvedRecipient)
         ? null
         : "Enter a valid 0x recipient address.";
-  const amountError = getAmountValidationMessage(amount, Number(selectedNote?.amount ?? 0), 6);
+  const amountError = getAmountValidationMessage(amount, Number(selectedNote?.amount ?? 0), selectedNoteMeta.decimals);
   const changeAmount = Math.max(0, Number(selectedNote?.amount ?? 0) - Number(amount || 0));
 
   async function handleUnshield() {
@@ -86,7 +94,8 @@ export default function UnshieldPage() {
       senderViewingPub: viewingPub as `0x${string}`,
       senderOwnerPk: BigInt(ownerPk),
       recipientAddress: resolvedRecipient as `0x${string}`,
-      amount: ethers.parseUnits(amount || "0", 18),
+      tokenAddress: selectedNoteMeta.contractAddress,
+      amount: ethers.parseUnits(amount || "0", selectedNoteMeta.decimals),
       onStatus: (msg) => {
         if (msg.toLowerCase().includes("generating")) setProofStep("proof");
         if (msg.toLowerCase().includes("relayer")) {
@@ -230,7 +239,7 @@ export default function UnshieldPage() {
                 <div className="flex items-center justify-between">
                   <span className="text-[#9ca3af]">Private change</span>
                   <span className="font-mono text-[#111827]">
-                    {selectedNote ? `${changeAmount.toFixed(6)} ${selectedNote.token}` : "-"}
+                    {selectedNote ? `${formatAmount(changeAmount)} ${selectedNote.token}` : "-"}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
