@@ -350,10 +350,15 @@ export async function executeUnshield(params: {
     changeAmount > 0n
       ? (BigInt(ethers.randomBytes(31).reduce((a, b) => (a << 8n) + BigInt(b), 0n)) || 1n)
       : 0n;
-  const changeCommitment =
-    changeAmount > 0n
-      ? await noteCommitment(poseidon, params.senderOwnerPk, tokenField, changeAmount, changeBlinding)
-      : ("0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`);
+  // Circuit always binds output lane 0 to hash(owner, token, changeAmount, changeBlinding); using bytes32(0)
+  // here breaks constraints on full unshield (changeAmount == 0).
+  const changeCommitment = await noteCommitment(
+    poseidon,
+    params.senderOwnerPk,
+    tokenField,
+    changeAmount,
+    changeBlinding
+  );
   const changeNote =
     changeAmount > 0n
       ? await encryptNoteECDH(
