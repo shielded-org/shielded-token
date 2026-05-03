@@ -2,7 +2,7 @@
 
 import {Copy, ShieldCheck} from "lucide-react";
 import {ethers} from "ethers";
-import {useState} from "react";
+import {useEffect, useState} from "react";
 import {PageShell} from "@/components/layout/page-shell";
 import {AmountInput} from "@/components/ui/amount-input";
 import {ActionOutcomeCard} from "@/components/ui/action-outcome-card";
@@ -11,10 +11,20 @@ import {HashDisplay} from "@/components/ui/hash-display";
 import {PrivacyWarning} from "@/components/ui/privacy-warning";
 import {SelectField} from "@/components/ui/select-field";
 import {TOKENS} from "@/lib/constants";
+import {ERC20_ABI, SEPOLIA} from "@/lib/shielded-config";
 import {shieldDeposit} from "@/lib/shielded-integration";
 import {getBrowserSigner} from "@/lib/web3";
 import {copyText, formatAmount, getAmountValidationMessage, nowIso} from "@/lib/utils";
 import {useShieldedStore} from "@/store/use-shielded-store";
+
+function formatReadableBalance(formattedUnits: string, maxFractionDigits = 8): string {
+  const n = Number(formattedUnits);
+  if (!Number.isFinite(n)) return formattedUnits;
+  return n.toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: Math.min(maxFractionDigits, 18),
+  });
+}
 
 export default function ShieldPage() {
   const address = useShieldedStore((state) => state.walletAddress);
@@ -30,9 +40,40 @@ export default function ShieldPage() {
   const [submitting, setSubmitting] = useState(false);
   const [successNote, setSuccessNote] = useState<`0x${string}` | null>(null);
   const [successTxHash, setSuccessTxHash] = useState<`0x${string}` | null>(null);
+  const [publicBalanceLabel, setPublicBalanceLabel] = useState<string | null>(null);
+  const [balanceLoading, setBalanceLoading] = useState(false);
+  const [balanceTick, setBalanceTick] = useState(0);
   const amountError = getAmountValidationMessage(amount, Number.MAX_SAFE_INTEGER, 6);
 
   const tokenMeta = tokenOptions.find((t) => t.symbol === token) ?? tokenOptions[0];
+
+  useEffect(() => {
+    if (!address) {
+      setPublicBalanceLabel(null);
+      setBalanceLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setBalanceLoading(true);
+    const provider = new ethers.JsonRpcProvider(SEPOLIA.rpcUrl, SEPOLIA.chainId);
+    const erc20 = new ethers.Contract(tokenMeta.contractAddress, ERC20_ABI, provider);
+    erc20
+      .balanceOf(address)
+      .then((raw: bigint) => {
+        if (cancelled) return;
+        const formatted = ethers.formatUnits(raw, tokenMeta.decimals);
+        setPublicBalanceLabel(formatReadableBalance(formatted));
+      })
+      .catch(() => {
+        if (!cancelled) setPublicBalanceLabel(null);
+      })
+      .finally(() => {
+        if (!cancelled) setBalanceLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [address, tokenMeta.contractAddress, tokenMeta.decimals, balanceTick]);
 
   async function handleSubmit() {
     if (!address) {
@@ -75,6 +116,7 @@ export default function ShieldPage() {
       });
       setSuccessNote(result.encryptedNote);
       setSuccessTxHash(result.txHash);
+      setBalanceTick((n) => n + 1);
     } finally {
       setSubmitting(false);
     }
@@ -100,6 +142,22 @@ export default function ShieldPage() {
                     </option>
                   ))}
                 </SelectField>
+                <p className="text-sm text-[#6b7280]" aria-live="polite">
+                  {!address ? (
+                    <>Connect your wallet to see your public balance available for shielding.</>
+                  ) : balanceLoading ? (
+                    <>Loading public balance…</>
+                  ) : publicBalanceLabel !== null ? (
+                    <>
+                      Public balance:{" "}
+                      <span className="font-mono text-[#374151]">
+                        {publicBalanceLabel} {token}
+                      </span>
+                    </>
+                  ) : (
+                    <>Could not load balance for this token.</>
+                  )}
+                </p>
               </label>
               <label className="space-y-2">
                 <span className="text-sm text-[#6b7280]">Amount</span>
