@@ -11,3 +11,4 @@ coverage/
 
 scripts/sepolia-deployment.json
 scripts/sepolia-e2e-state.json
+scripts/mock-erc20-batch-deployment.json
