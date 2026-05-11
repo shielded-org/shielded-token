@@ -32,6 +32,7 @@ export default function UnshieldPage() {
   const viewingPub = useShieldedStore((state) => state.viewingPub);
   const walletAddress = useShieldedStore((state) => state.walletAddress);
   const availableTokens = useShieldedStore((state) => state.tokens);
+  const shieldedRpcChainId = useShieldedStore((state) => state.shieldedRpcChainId);
   const tokenOptions = availableTokens.length > 0 ? availableTokens : TOKENS;
 
   const [recipientMode, setRecipientMode] = useState<RecipientMode>("self");
@@ -89,6 +90,7 @@ export default function UnshieldPage() {
     const {executeUnshield} = await import("@/lib/private-transfer");
     const response = await executeUnshield({
       relayerUrl: process.env.NEXT_PUBLIC_RELAYER_URL ?? "http://127.0.0.1:8787",
+      shieldedChainId: shieldedRpcChainId,
       senderSpendingKey: BigInt(spendingKey),
       senderViewingPriv: BigInt(viewingKey),
       senderViewingPub: viewingPub as `0x${string}`,

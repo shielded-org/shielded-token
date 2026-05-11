@@ -6,9 +6,12 @@ import {Building2, House, Menu, Settings, TerminalSquare, X} from "lucide-react"
 import {ethers} from "ethers";
 import {useEffect, useState} from "react";
 import {WalletConnection} from "@/components/wallet/wallet-connection";
-import {NAV_ITEMS, RELAYER_URL, TOKENS} from "@/lib/constants";
+import {WalletNetworkSyncBanner} from "@/components/wallet/wallet-network-sync-banner";
+import {NAV_ITEMS, RELAYER_URL} from "@/lib/constants";
 import {deriveShieldedKeysFromWallet, mapNotesToUi, resolveNoteStates, scanPrivateState} from "@/lib/shielded-integration";
-import {ERC20_ABI, SEPOLIA} from "@/lib/shielded-config";
+import {buildTokenDefinitionsForShieldedNetwork, getShieldedNetwork, getShieldedNetworks, type ShieldedChainId} from "@/lib/networks";
+import {getWorkingReadProvider} from "@/lib/rpc-read";
+import {ERC20_ABI} from "@/lib/shielded-config";
 import {cn} from "@/lib/utils";
 import {getActiveInjectedProvider} from "@/lib/injected-wallet";
 import {useShieldedStore} from "@/store/use-shielded-store";
@@ -29,6 +32,8 @@ export function AppShell({children}: {children: React.ReactNode}) {
   const setKeyMaterial = useShieldedStore((state) => state.setKeyMaterial);
   const setNotes = useShieldedStore((state) => state.setNotes);
   const setTokens = useShieldedStore((state) => state.setTokens);
+  const shieldedRpcChainId = useShieldedStore((state) => state.shieldedRpcChainId);
+  const setShieldedRpcChainId = useShieldedStore((state) => state.setShieldedRpcChainId);
 
   useEffect(() => {
     let mounted = true;
@@ -79,7 +84,8 @@ export function AppShell({children}: {children: React.ReactNode}) {
             (await provider.request({
               method: "personal_sign",
               params: [message, address],
-            })) as `0x${string}`
+            })) as `0x${string}`,
+          shieldedRpcChainId
         );
         if (cancelled) return;
         setKeyMaterial({
@@ -97,14 +103,17 @@ export function AppShell({children}: {children: React.ReactNode}) {
     return () => {
       cancelled = true;
     };
-  }, [address, keyMaterialAddress, ownerPk, setKeyMaterial, spendingKey, viewingKey, viewingPub]);
+  }, [address, keyMaterialAddress, ownerPk, setKeyMaterial, shieldedRpcChainId, spendingKey, viewingKey, viewingPub]);
 
   useEffect(() => {
     let cancelled = false;
     async function resolveTokenMetadata() {
       try {
-        const provider = new ethers.JsonRpcProvider(SEPOLIA.rpcUrl, SEPOLIA.chainId);
-        const unique = Array.from(new Set(TOKENS.map((t) => t.contractAddress.toLowerCase())));
+        const net = getShieldedNetwork(shieldedRpcChainId);
+        if (!net) return;
+        const provider = await getWorkingReadProvider(net);
+        const defs = buildTokenDefinitionsForShieldedNetwork(net);
+        const unique = Array.from(new Set(defs.map((t) => t.contractAddress.toLowerCase())));
         const resolved = await Promise.all(
           unique.map(async (addr, index) => {
             const token = new ethers.Contract(addr, ERC20_ABI, provider);
@@ -113,7 +122,7 @@ export function AppShell({children}: {children: React.ReactNode}) {
               symbol: String(symbol),
               name: String(symbol),
               decimals: Number(decimals),
-              accent: TOKENS[index % TOKENS.length]?.accent ?? TOKENS[0].accent,
+              accent: defs[index % defs.length]?.accent ?? defs[0].accent,
               icon: String(symbol).slice(0, 1).toUpperCase(),
               contractAddress: ethers.getAddress(addr) as `0x${string}`,
             };
@@ -130,7 +139,7 @@ export function AppShell({children}: {children: React.ReactNode}) {
     return () => {
       cancelled = true;
     };
-  }, [setTokens]);
+  }, [setTokens, shieldedRpcChainId]);
 
   useEffect(() => {
     if (!viewingPub || !viewingKey || !spendingKey) return;
@@ -138,8 +147,8 @@ export function AppShell({children}: {children: React.ReactNode}) {
     let cancelled = false;
     async function syncNotes() {
       try {
-        const scan = await scanPrivateState(BigInt(viewingKey), activeViewingPub);
-        const resolvedNotes = await resolveNoteStates(scan.notes, BigInt(spendingKey));
+        const scan = await scanPrivateState(BigInt(viewingKey), activeViewingPub, shieldedRpcChainId);
+        const resolvedNotes = await resolveNoteStates(scan.notes, BigInt(spendingKey), shieldedRpcChainId);
         if (cancelled) return;
         setLastSyncedBlock(scan.stats.latestBlock);
         setNotes(mapNotesToUi(resolvedNotes, tokens));
@@ -155,7 +164,9 @@ export function AppShell({children}: {children: React.ReactNode}) {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [setLastSyncedBlock, setNotes, spendingKey, tokens, viewingKey, viewingPub]);
+  }, [setLastSyncedBlock, setNotes, shieldedRpcChainId, spendingKey, tokens, viewingKey, viewingPub]);
+
+  const shieldedNetworks = getShieldedNetworks();
 
   return (
     <div className="min-h-screen bg-[#f3f4f6] text-[#111827]">
@@ -232,10 +243,27 @@ export function AppShell({children}: {children: React.ReactNode}) {
                   Synced to block {lastSyncedBlock.toLocaleString()}
                 </span>
               </nav>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                {shieldedNetworks.length > 1 ? (
+                  <label className="flex items-center gap-2 text-xs text-[#6b7280]">
+                    <span className="whitespace-nowrap">Pool network</span>
+                    <select
+                      className="rounded-lg border border-[#e5e7eb] bg-white px-2 py-1.5 text-xs text-[#111827]"
+                      value={shieldedRpcChainId}
+                      onChange={(e) => setShieldedRpcChainId(Number(e.target.value) as ShieldedChainId)}
+                    >
+                      {shieldedNetworks.map((n) => (
+                        <option key={n.id} value={n.id}>
+                          {n.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
                 <WalletConnection />
               </div>
             </div>
+            <WalletNetworkSyncBanner />
           </header>
 
           <main className="flex-1 pt-6">{children}</main>

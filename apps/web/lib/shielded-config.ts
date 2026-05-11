@@ -1,19 +1,19 @@
+import {CHAIN_ID_ETH_SEPOLIA, getShieldedNetwork} from "./networks";
+
+const eth = getShieldedNetwork(CHAIN_ID_ETH_SEPOLIA)!;
+
+/** @deprecated Prefer getShieldedNetwork(chainId) for multi-chain */
 export const SEPOLIA = {
-  chainId: 11155111,
-  rpcUrl: process.env.NEXT_PUBLIC_RPC_URL ?? "https://ethereum-sepolia-rpc.publicnode.com",
-  explorerBaseUrl: "https://sepolia.etherscan.io",
+  chainId: eth.id,
+  rpcUrl: eth.rpcUrl,
+  explorerBaseUrl: eth.explorerBaseUrl,
 };
 
-export const CONTRACTS = {
-  poseidon: (process.env.NEXT_PUBLIC_POSEIDON_ADDRESS ?? "0xa9CC305Af95542673aea1518881B6F1E7A8DE3b8") as `0x${string}`,
-  poseidonHasher: (process.env.NEXT_PUBLIC_POSEIDON_HASHER_ADDRESS ?? "0xE6d12EfF9db5FDb548Aa17Ad1587623FFAe3BE96") as `0x${string}`,
-  verifier: (process.env.NEXT_PUBLIC_VERIFIER_ADDRESS ?? "0xf45A783A47c68570b9D786a291e934F6A6B70950") as `0x${string}`,
-  merkleTree: (process.env.NEXT_PUBLIC_MERKLE_TREE_ADDRESS ?? "0x3C4A041C4145B7FEF8C341Ca10D162A717adcc7A") as `0x${string}`,
-  pool: (process.env.NEXT_PUBLIC_POOL_ADDRESS ?? "0xDd10f44Bc04451f0e1B698F5a8422f56d0d05966") as `0x${string}`,
-  token: (process.env.NEXT_PUBLIC_TOKEN_ADDRESS ?? "0x9DBEd8AB4A05b5E4b6aF3bf61AA3051F6caa91b4") as `0x${string}`,
-};
+/** @deprecated Prefer getShieldedNetwork(chainId).contracts */
+export const CONTRACTS = eth.contracts;
 
-export const POOL_DEPLOY_BLOCK = Number(process.env.NEXT_PUBLIC_POOL_DEPLOY_BLOCK ?? 10744004);
+/** @deprecated Prefer getShieldedNetwork(chainId).poolDeployBlock */
+export const POOL_DEPLOY_BLOCK = eth.poolDeployBlock;
 
 export const POOL_ABI = [
   "event RoutedCommitment(bytes32 indexed channel, bytes32 indexed subchannel, bytes encryptedNote)",
