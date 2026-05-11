@@ -25,6 +25,7 @@ const RELAYER_POLL_INTERVAL_MS = Number(process.env.RELAYER_POLL_INTERVAL_MS || 
 const DEPLOYER_KEY =
   process.env.LOCAL_PRIVATE_KEY ||
   "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+const LOCAL_CHAIN_ID = Number(process.env.LOCAL_CHAIN_ID || process.env.HARDHAT_CHAIN_ID || 31337);
 
 /// Monolithic ShieldedToken: ERC20 + embedded pool (STRK20-style coordinator).
 const SHIELDED_TOKEN_ABI = [
@@ -67,7 +68,7 @@ async function relayShieldedTransfer(bundle) {
   const res = await fetch(`${RELAYER_URL}/relay/shielded-transfer`, {
     method: "POST",
     headers: {"content-type": "application/json"},
-    body: JSON.stringify(bundle),
+    body: JSON.stringify({chainId: LOCAL_CHAIN_ID, ...bundle}),
   });
   const payload = await res.json();
   if (!res.ok) {

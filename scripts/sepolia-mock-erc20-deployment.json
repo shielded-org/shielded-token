@@ -1,0 +1,34 @@
+{
+  "network": "sepolia",
+  "chainId": 11155111,
+  "tokens": [
+    {
+      "key": "USDC",
+      "name": "USD Coin",
+      "symbol": "USDC",
+      "decimals": 6,
+      "address": "0x093856dc11cbEFeBb6c53E112F85E807D44ca9c2"
+    },
+    {
+      "key": "USDT",
+      "name": "Tether USD",
+      "symbol": "USDT",
+      "decimals": 6,
+      "address": "0x70bdC729406Ee9C547522529f43F48028FCf374A"
+    },
+    {
+      "key": "DAI",
+      "name": "Dai Stablecoin",
+      "symbol": "DAI",
+      "decimals": 18,
+      "address": "0xDc256389b94e511caEe10A75F1FE4246c185c288"
+    },
+    {
+      "key": "LINK",
+      "name": "ChainLink Token",
+      "symbol": "LINK",
+      "decimals": 18,
+      "address": "0xFFBeF846263Af332CF34f7AC1F54aD09745c8c05"
+    }
+  ]
+}
