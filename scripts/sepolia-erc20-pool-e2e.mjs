@@ -17,7 +17,7 @@ const __dirname = path.dirname(__filename);
 const root = path.resolve(__dirname, "..");
 const contractsDir = path.join(root, "packages", "contracts");
 const circuitsDir = path.join(root, "packages", "circuits");
-const deploymentJsonPath = path.join(__dirname, "sepolia-pool-deployment.json");
+const deploymentJsonPath = process.env.POOL_DEPLOYMENT_JSON || path.join(__dirname, "sepolia-pool-deployment.json");
 
 const TESTNET_RPC_URL = process.env.TESTNET_RPC_URL || "";
 const TESTNET_CHAIN_ID = Number(process.env.TESTNET_CHAIN_ID || 11155111);
@@ -34,6 +34,7 @@ const RELAYER_CONFIRM_TIMEOUT_MS = Number(process.env.RELAYER_CONFIRM_TIMEOUT_MS
 const RELAYER_POLL_INTERVAL_MS = Number(process.env.RELAYER_POLL_INTERVAL_MS || 3_000);
 const SKIP_DEPLOY = String(process.env.SKIP_DEPLOY || "").toLowerCase() === "true" || process.env.SKIP_DEPLOY === "1";
 const DEPLOY_MOCK_TOKEN = String(process.env.DEPLOY_MOCK_TOKEN || "").toLowerCase() === "true" || process.env.DEPLOY_MOCK_TOKEN === "1";
+const POOL_DEPLOY_ONLY = String(process.env.POOL_DEPLOY_ONLY || "").toLowerCase() === "true" || process.env.POOL_DEPLOY_ONLY === "1";
 const TESTNET_POOL_TOKEN_ADDRESS = process.env.TESTNET_POOL_TOKEN_ADDRESS || "";
 const KEY_DERIVATION_SEED = process.env.KEY_DERIVATION_SEED || "zkproject-deterministic-seed-v1";
 const BN254_FIELD_MODULUS = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
@@ -110,7 +111,7 @@ async function relayShieldedTransfer(bundle) {
   const res = await fetch(`${RELAYER_URL}/relay/shielded-transfer`, {
     method: "POST",
     headers: {"content-type": "application/json"},
-    body: JSON.stringify(bundle),
+    body: JSON.stringify({chainId: TESTNET_CHAIN_ID, ...bundle}),
   });
   const payload = await res.json();
   if (!res.ok) throw new Error(`Relayer rejected request (${res.status}): ${payload.error || "unknown error"}`);
@@ -767,6 +768,11 @@ async function main() {
         }
       }
     }
+  }
+
+  if (POOL_DEPLOY_ONLY) {
+    console.log("== POOL_DEPLOY_ONLY: deployment artifacts written; skipping scripted shields/transfers ==");
+    process.exit(0);
   }
 
   const poseidonRW = new ethers.Contract(poseidonAddress, POSEIDON_ABI, provider);

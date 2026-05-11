@@ -28,6 +28,7 @@ export default function TransferPage() {
   const viewingKey = useShieldedStore((state) => state.viewingKey);
   const viewingPub = useShieldedStore((state) => state.viewingPub);
   const availableTokens = useShieldedStore((state) => state.tokens);
+  const shieldedRpcChainId = useShieldedStore((state) => state.shieldedRpcChainId);
   const tokenOptions = availableTokens.length > 0 ? availableTokens : TOKENS;
 
   const [recipient, setRecipient] = useState("");
@@ -54,7 +55,16 @@ export default function TransferPage() {
     candidateNotes.find((note) => note.id === selectedNoteId) ?? candidateNotes[0];
   const changeAmount = Math.max(0, Number(selectedNote?.amount ?? 0) - Number(amount || 0));
   const recipientError = recipient.startsWith("shd_")
-    ? null
+    ? (() => {
+        try {
+          const d = decodeShieldedAddress(recipient);
+          return d.chainId !== shieldedRpcChainId
+            ? `This shielded address targets chain ${d.chainId}. Switch pool network in the header to match.`
+            : null;
+        } catch {
+          return "Invalid shielded address.";
+        }
+      })()
     : isValidViewingKey(recipient)
       ? null
       : "Enter a valid shielded address or viewing key.";
@@ -85,6 +95,7 @@ export default function TransferPage() {
     const {executePrivateTransfer} = await import("@/lib/private-transfer");
     const relayerResponse = await executePrivateTransfer({
       relayerUrl: process.env.NEXT_PUBLIC_RELAYER_URL ?? "http://127.0.0.1:8787",
+      shieldedChainId: shieldedRpcChainId,
       senderSpendingKey: BigInt(spendingKey),
       senderOwnerPk: BigInt(ownerPk),
       senderViewingPriv: BigInt(viewingKey),

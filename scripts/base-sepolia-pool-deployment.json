@@ -1,0 +1,14 @@
+{
+  "testnet": "base-sepolia",
+  "chainId": 84532,
+  "rpcUrl": "https://base-sepolia-rpc.publicnode.com",
+  "blockExplorer": "https://sepolia.basescan.org",
+  "poseidon": "0xEC71805247833595B77eF444D4e9EF95FFFB0fD5",
+  "poseidonHasher": "0x5056ecfD57e1a5D5b9CE15383cD3655fA434f8be",
+  "verifier": "0x053a1257e5c69754F772e549A93752963B35D66a",
+  "merkleTree": "0x3AD3c6ffE9323A58bcf4ADF3E091E07eC6570976",
+  "pool": "0xA4421d963f0C89FaAF489FfFC0eb662Fc67C030F",
+  "token": "0x19DCe2d215C6b7EA1B247460E7FA6A9f7FFc60e8",
+  "poolDeployBlock": 41373731,
+  "deployedAt": "2026-05-11T16:09:14.017Z"
+}

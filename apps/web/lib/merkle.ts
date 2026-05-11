@@ -1,5 +1,5 @@
 import {ethers} from "ethers";
-import {MERKLE_ABI, POOL_DEPLOY_BLOCK, POSEIDON_ABI} from "./shielded-config";
+import {MERKLE_ABI, POSEIDON_ABI} from "./shielded-config";
 
 function toHex32(v: bigint): `0x${string}` {
   return ethers.zeroPadValue(ethers.toBeHex(v), 32) as `0x${string}`;
@@ -62,7 +62,11 @@ function extractPath(levelMaps: Map<number, bigint>[], zeroes: bigint[], targetI
   return {root, siblings, directions};
 }
 
-export async function loadAllLeaves(provider: ethers.JsonRpcProvider, merkleTreeAddress: `0x${string}`): Promise<`0x${string}`[]> {
+export async function loadAllLeaves(
+  provider: ethers.JsonRpcProvider,
+  merkleTreeAddress: `0x${string}`,
+  fromBlock: number
+): Promise<`0x${string}`[]> {
   const iface = new ethers.Interface(MERKLE_ABI);
   const event = iface.getEvent("LeafInserted");
   if (!event) return [];
@@ -70,7 +74,7 @@ export async function loadAllLeaves(provider: ethers.JsonRpcProvider, merkleTree
   const latest = await provider.getBlockNumber();
   const logs: ethers.Log[] = [];
   const chunkSize = 50_000;
-  let start = POOL_DEPLOY_BLOCK;
+  let start = fromBlock;
   while (start <= latest) {
     const end = Math.min(start + chunkSize - 1, latest);
     const part = await provider.getLogs({address: merkleTreeAddress, fromBlock: start, toBlock: end, topics: [topic]});
@@ -91,9 +95,10 @@ export async function buildInputMerklePaths(params: {
   poseidonAddress: `0x${string}`;
   merkleTreeAddress: `0x${string}`;
   targetCommitments: [`0x${string}`, `0x${string}`];
+  poolDeployBlock: number;
 }) {
   const poseidon = new ethers.Contract(params.poseidonAddress, POSEIDON_ABI, params.provider);
-  const leaves = await loadAllLeaves(params.provider, params.merkleTreeAddress);
+  const leaves = await loadAllLeaves(params.provider, params.merkleTreeAddress, params.poolDeployBlock);
   const index0 = leaves.findIndex((x) => x.toLowerCase() === params.targetCommitments[0].toLowerCase());
   const index1 = leaves.findIndex((x) => x.toLowerCase() === params.targetCommitments[1].toLowerCase());
   if (index0 < 0 || index1 < 0) throw new Error("Could not find commitment in Merkle leaves");
@@ -115,9 +120,10 @@ export async function buildMerklePathForCommitment(params: {
   poseidonAddress: `0x${string}`;
   merkleTreeAddress: `0x${string}`;
   targetCommitment: `0x${string}`;
+  poolDeployBlock: number;
 }) {
   const poseidon = new ethers.Contract(params.poseidonAddress, POSEIDON_ABI, params.provider);
-  const leaves = await loadAllLeaves(params.provider, params.merkleTreeAddress);
+  const leaves = await loadAllLeaves(params.provider, params.merkleTreeAddress, params.poolDeployBlock);
   const index = leaves.findIndex((x) => x.toLowerCase() === params.targetCommitment.toLowerCase());
   if (index < 0) throw new Error("Could not find commitment in Merkle leaves");
   const {levels, zeroes} = await buildLevelMaps(poseidon, leaves, 20);

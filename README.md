@@ -96,6 +96,58 @@ UltraHonk Solidity verifier generated from circuit VK using `bb contract`.
 
 ---
 
+## Deployed testnet contracts (reference)
+
+These addresses are checked into the repo as deployment snapshots (`scripts/sepolia-pool-deployment.json`, `scripts/base-sepolia-pool-deployment.json`, `scripts/sepolia-mock-erc20-deployment.json`, `scripts/base-sepolia-mock-erc20-deployment.json`). If you redeploy, update those JSON files and your app env (`NEXT_PUBLIC_*` / `VITE_*`) to match.
+
+On explorers, the in-repo verifier artifact is **`UltraVerifier`** (from `packages/contracts/src/HonkVerifier.sol`). Other deploys use the same Solidity names: `Poseidon2`, `Poseidon2YulHasher`, `IncrementalMerkleTree`, `ShieldedERC20Pool`, `MockERC20`.
+
+### Ethereum Sepolia (chain id `11155111`)
+
+| Contract | Address | Explorer |
+| --- | --- | --- |
+| `Poseidon2` | `0xa9CC305Af95542673aea1518881B6F1E7A8DE3b8` | [Etherscan](https://sepolia.etherscan.io/address/0xa9CC305Af95542673aea1518881B6F1E7A8DE3b8) |
+| `Poseidon2YulHasher` | `0xE6d12EfF9db5FDb548Aa17Ad1587623FFAe3BE96` | [Etherscan](https://sepolia.etherscan.io/address/0xE6d12EfF9db5FDb548Aa17Ad1587623FFAe3BE96) |
+| `UltraVerifier` | `0xf45A783A47c68570b9D786a291e934F6A6B70950` | [Etherscan](https://sepolia.etherscan.io/address/0xf45A783A47c68570b9D786a291e934F6A6B70950) |
+| `IncrementalMerkleTree` | `0x3C4A041C4145B7FEF8C341Ca10D162A717adcc7A` | [Etherscan](https://sepolia.etherscan.io/address/0x3C4A041C4145B7FEF8C341Ca10D162A717adcc7A) |
+| `ShieldedERC20Pool` | `0xDd10f44Bc04451f0e1B698F5a8422f56d0d05966` | [Etherscan](https://sepolia.etherscan.io/address/0xDd10f44Bc04451f0e1B698F5a8422f56d0d05966) |
+| `MockERC20` (pool primary **MOCK**, 18 decimals) | `0x9DBEd8AB4A05b5E4b6aF3bf61AA3051F6caa91b4` | [Etherscan](https://sepolia.etherscan.io/address/0x9DBEd8AB4A05b5E4b6aF3bf61AA3051F6caa91b4) |
+
+**Sepolia extra pool mocks** (`MockERC20`, same pool owner allowlist — use `scripts/enable-pool-tokens.mjs` after deploy if they are not already enabled):
+
+| Symbol | Decimals | Address |
+| --- | ---: | --- |
+| USDC | 6 | `0x093856dc11cbEFeBb6c53E112F85E807D44ca9c2` |
+| USDT | 6 | `0x70bdC729406Ee9C547522529f43F48028FCf374A` |
+| DAI | 18 | `0xDc256389b94e511caEe10A75F1FE4246c185c288` |
+| LINK | 18 | `0xFFBeF846263Af332CF34f7AC1F54aD09745c8c05` |
+
+Indexed from block **10744004** for this pool deployment (see `poolDeployBlock` in `scripts/sepolia-pool-deployment.json`).
+
+### Base Sepolia (chain id `84532`)
+
+| Contract | Address | Explorer |
+| --- | --- | --- |
+| `Poseidon2` | `0xEC71805247833595B77eF444D4e9EF95FFFB0fD5` | [Basescan](https://sepolia.basescan.org/address/0xEC71805247833595B77eF444D4e9EF95FFFB0fD5) |
+| `Poseidon2YulHasher` | `0x5056ecfD57e1a5D5b9CE15383cD3655fA434f8be` | [Basescan](https://sepolia.basescan.org/address/0x5056ecfD57e1a5D5b9CE15383cD3655fA434f8be) |
+| `UltraVerifier` | `0x053a1257e5c69754F772e549A93752963B35D66a` | [Basescan](https://sepolia.basescan.org/address/0x053a1257e5c69754F772e549A93752963B35D66a) |
+| `IncrementalMerkleTree` | `0x3AD3c6ffE9323A58bcf4ADF3E091E07eC6570976` | [Basescan](https://sepolia.basescan.org/address/0x3AD3c6ffE9323A58bcf4ADF3E091E07eC6570976) |
+| `ShieldedERC20Pool` | `0xA4421d963f0C89FaAF489FfFC0eb662Fc67C030F` | [Basescan](https://sepolia.basescan.org/address/0xA4421d963f0C89FaAF489FfFC0eb662Fc67C030F) |
+| `MockERC20` (pool primary **MOCK**, 18 decimals) | `0x19DCe2d215C6b7EA1B247460E7FA6A9f7FFc60e8` | [Basescan](https://sepolia.basescan.org/address/0x19DCe2d215C6b7EA1B247460E7FA6A9f7FFc60e8) |
+
+**Base Sepolia batch mocks** (deployed with `scripts/deploy-mock-erc20-batch.mjs`; pool deployer in snapshot: `0x82E6d844629b734a118c339B9f80e404f117DF61`):
+
+| Symbol | Decimals | Address |
+| --- | ---: | --- |
+| USDC | 6 | `0x120d58806E33b07d1eBd6946d4691b13e259712a` |
+| USDT | 6 | `0x6A3b629F9eB189E194B947CF84d47c60CCc6a1Df` |
+| DAI | 18 | `0x4f57D26465D51d1Bb91Ed44ae85F2245256B7cAa` |
+| LINK | 18 | `0x819EA63eB94992766c935B8C34D00b259cF45BF6` |
+
+Indexed from block **41373731** for this pool deployment (see `poolDeployBlock` in `scripts/base-sepolia-pool-deployment.json`).
+
+---
+
 ## Circuit overview (`packages/circuits/src/main.nr`)
 
 The Noir circuit enforces:

@@ -2,11 +2,12 @@
 
 import {BadgeCheck, PlugZap} from "lucide-react";
 import {ethers} from "ethers";
-import {useMemo, useState} from "react";
+import {useEffect, useMemo, useState} from "react";
 import {Button} from "@/components/ui/button";
-import {listInjectedProviders, setActiveInjectedProvider} from "@/lib/injected-wallet";
+import {getActiveInjectedProvider, listInjectedProviders, setActiveInjectedProvider} from "@/lib/injected-wallet";
+import {getShieldedNetwork} from "@/lib/networks";
 import {shortenHash} from "@/lib/utils";
-import {mainnet, sepolia} from "wagmi/chains";
+import {baseSepolia, mainnet, sepolia} from "wagmi/chains";
 import {useShieldedStore} from "@/store/use-shielded-store";
 
 export function WalletConnection() {
@@ -14,17 +15,45 @@ export function WalletConnection() {
   const chainId = useShieldedStore((state) => state.chainId);
   const setWalletConnection = useShieldedStore((state) => state.setWalletConnection);
   const clearKeyMaterial = useShieldedStore((state) => state.clearKeyMaterial);
+  const shieldedRpcChainId = useShieldedStore((state) => state.shieldedRpcChainId);
   const [showWalletDialog, setShowWalletDialog] = useState(false);
   const [pendingConnectorId, setPendingConnectorId] = useState<string | null>(null);
   const [nativeBalance, setNativeBalance] = useState<string | null>(null);
   const isConnected = Boolean(address);
-  const chainName = chainId === mainnet.id ? "Mainnet" : chainId === sepolia.id ? "Sepolia" : `Chain ${chainId}`;
-  const supportedChain = chainId === mainnet.id || chainId === sepolia.id;
+  const chainName =
+    chainId === mainnet.id
+      ? "Mainnet"
+      : chainId === sepolia.id
+        ? "Sepolia"
+        : chainId === baseSepolia.id
+          ? "Base Sepolia"
+          : `Chain ${chainId}`;
+  const supportedChain = chainId === mainnet.id || chainId === sepolia.id || chainId === baseSepolia.id;
+  const poolNet = getShieldedNetwork(shieldedRpcChainId);
+  const walletMatchesPool = chainId != null && chainId === shieldedRpcChainId;
   const availableConnectors = useMemo(() => {
     return listInjectedProviders().map((item) => ({id: item.name.toLowerCase(), name: item.name, provider: item.provider}));
   }, []);
   const connectorUnavailable = availableConnectors.length === 0;
   const isPending = pendingConnectorId !== null;
+
+  useEffect(() => {
+    if (!address) return undefined;
+    const provider = getActiveInjectedProvider();
+    if (!provider?.on) return undefined;
+    const onChainChanged = (hexChainId: unknown) => {
+      const next = typeof hexChainId === "string" ? Number(hexChainId) : NaN;
+      if (!Number.isFinite(next)) return;
+      const {walletAddress} = useShieldedStore.getState();
+      if (walletAddress) {
+        useShieldedStore.getState().setWalletConnection(walletAddress, next);
+      }
+    };
+    provider.on("chainChanged", onChainChanged);
+    return () => {
+      provider.removeListener?.("chainChanged", onChainChanged);
+    };
+  }, [address]);
 
   async function connectWith(connectorId: string) {
     const connector = availableConnectors.find((item) => item.id === connectorId);
@@ -66,6 +95,14 @@ export function WalletConnection() {
           {!supportedChain ? (
             <span className="rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-amber-300">
               Wrong network
+            </span>
+          ) : null}
+          {supportedChain && isConnected && poolNet && !walletMatchesPool ? (
+            <span
+              className="max-w-44 truncate rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-amber-800"
+              title={`Pool network is ${poolNet.label}. Use Switch wallet in the header banner to align your wallet.`}
+            >
+              Pool: {poolNet.label}
             </span>
           ) : null}
           <span className="rounded-full border border-[#c7d2fe] bg-[#eef2ff] px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-[#3730a3]">

@@ -3,6 +3,7 @@
 import {create} from "zustand";
 import {createJSONStorage, persist} from "zustand/middleware";
 import {TOKENS} from "@/lib/constants";
+import {defaultShieldedChainId, normalizeStoredShieldedChainId, type ShieldedChainId} from "@/lib/networks";
 import type {AppMode, Note, RelayerHealth, TokenDefinition, TransactionRecord, TransactionStatus} from "@/lib/types";
 
 type ShieldedState = {
@@ -13,6 +14,8 @@ type ShieldedState = {
   keyMaterialAddress: `0x${string}` | null;
   walletAddress: `0x${string}` | null;
   chainId: number | null;
+  /** RPC network used for shielded pool reads / proofs (may differ from wallet chain until user switches wallet). */
+  shieldedRpcChainId: ShieldedChainId;
   tokens: TokenDefinition[];
   notes: Note[];
   nullifiers: string[];
@@ -25,6 +28,7 @@ type ShieldedState = {
   setRevealBalances: (value: boolean) => void;
   setTokens: (tokens: TokenDefinition[]) => void;
   setWalletConnection: (walletAddress: `0x${string}` | null, chainId: number | null) => void;
+  setShieldedRpcChainId: (chainId: ShieldedChainId) => void;
   setKeyMaterial: (keys: {
     spendingKey: string;
     viewingKey: string;
@@ -52,6 +56,7 @@ export const useShieldedStore = create<ShieldedState>()(
       keyMaterialAddress: null,
       walletAddress: null,
       chainId: null,
+      shieldedRpcChainId: defaultShieldedChainId(),
       tokens: TOKENS,
       notes: [],
       nullifiers: [],
@@ -68,6 +73,7 @@ export const useShieldedStore = create<ShieldedState>()(
       setRevealBalances: (revealBalances) => set({revealBalances}),
       setTokens: (tokens) => set({tokens}),
       setWalletConnection: (walletAddress, chainId) => set({walletAddress, chainId}),
+      setShieldedRpcChainId: (shieldedRpcChainId) => set({shieldedRpcChainId: normalizeStoredShieldedChainId(shieldedRpcChainId)}),
       setKeyMaterial: (keys) =>
         set({
           spendingKey: keys.spendingKey,
@@ -142,6 +148,7 @@ export const useShieldedStore = create<ShieldedState>()(
         keyMaterialAddress: state.keyMaterialAddress,
         walletAddress: state.walletAddress,
         chainId: state.chainId,
+        shieldedRpcChainId: normalizeStoredShieldedChainId(state.shieldedRpcChainId),
         tokens: state.tokens,
         notes: state.notes,
         nullifiers: state.nullifiers,

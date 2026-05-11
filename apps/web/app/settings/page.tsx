@@ -5,7 +5,6 @@ import {useMemo, useState} from "react";
 import {PageShell} from "@/components/layout/page-shell";
 import {Button} from "@/components/ui/button";
 import {encodeShieldedAddress} from "@/lib/shielded-address";
-import {SEPOLIA} from "@/lib/shielded-config";
 import {copyText} from "@/lib/utils";
 import {useShieldedStore} from "@/store/use-shielded-store";
 
@@ -45,6 +44,7 @@ export default function SettingsPage() {
   const viewingKey = useShieldedStore((state) => state.viewingKey);
   const viewingPub = useShieldedStore((state) => state.viewingPub);
   const ownerPk = useShieldedStore((state) => state.ownerPk);
+  const shieldedRpcChainId = useShieldedStore((state) => state.shieldedRpcChainId);
   const [showKeys, setShowKeys] = useState(false);
   const [copiedField, setCopiedField] = useState<string | null>(null);
 
@@ -55,7 +55,7 @@ export default function SettingsPage() {
           ? encodeShieldedAddress({
               ownerPk: BigInt(ownerPk),
               viewingPub,
-              chainId: SEPOLIA.chainId,
+              chainId: shieldedRpcChainId,
             })
           : "-",
       ownerPublicKey: ownerPk || "-",
@@ -63,7 +63,7 @@ export default function SettingsPage() {
       ownerPrivateKey: spendingKey || "-",
       viewingPrivateKey: viewingKey || "-",
     }),
-    [ownerPk, spendingKey, viewingKey, viewingPub]
+    [ownerPk, shieldedRpcChainId, spendingKey, viewingKey, viewingPub]
   );
 
   async function handleCopy(label: string, value: string) {

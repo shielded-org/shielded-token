@@ -11,7 +11,9 @@ import {HashDisplay} from "@/components/ui/hash-display";
 import {PrivacyWarning} from "@/components/ui/privacy-warning";
 import {SelectField} from "@/components/ui/select-field";
 import {TOKENS} from "@/lib/constants";
-import {ERC20_ABI, SEPOLIA} from "@/lib/shielded-config";
+import {getShieldedNetwork} from "@/lib/networks";
+import {formatWalletBroadcastError, getWorkingReadProvider} from "@/lib/rpc-read";
+import {ERC20_ABI} from "@/lib/shielded-config";
 import {shieldDeposit} from "@/lib/shielded-integration";
 import {getBrowserSigner} from "@/lib/web3";
 import {copyText, formatAmount, getAmountValidationMessage, nowIso} from "@/lib/utils";
@@ -31,6 +33,7 @@ export default function ShieldPage() {
   const addNote = useShieldedStore((state) => state.addNote);
   const upsertTransaction = useShieldedStore((state) => state.upsertTransaction);
   const availableTokens = useShieldedStore((state) => state.tokens);
+  const shieldedRpcChainId = useShieldedStore((state) => state.shieldedRpcChainId);
   const ownerPk = useShieldedStore((state) => state.ownerPk);
   const viewingPub = useShieldedStore((state) => state.viewingPub);
   const tokenOptions = availableTokens.length > 0 ? availableTokens : TOKENS;
@@ -43,6 +46,7 @@ export default function ShieldPage() {
   const [publicBalanceLabel, setPublicBalanceLabel] = useState<string | null>(null);
   const [balanceLoading, setBalanceLoading] = useState(false);
   const [balanceTick, setBalanceTick] = useState(0);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const amountError = getAmountValidationMessage(amount, Number.MAX_SAFE_INTEGER, 6);
 
   const tokenMeta = tokenOptions.find((t) => t.symbol === token) ?? tokenOptions[0];
@@ -55,25 +59,31 @@ export default function ShieldPage() {
     }
     let cancelled = false;
     setBalanceLoading(true);
-    const provider = new ethers.JsonRpcProvider(SEPOLIA.rpcUrl, SEPOLIA.chainId);
-    const erc20 = new ethers.Contract(tokenMeta.contractAddress, ERC20_ABI, provider);
-    erc20
-      .balanceOf(address)
-      .then((raw: bigint) => {
+    const net = getShieldedNetwork(shieldedRpcChainId);
+    if (!net) {
+      setPublicBalanceLabel(null);
+      setBalanceLoading(false);
+      return;
+    }
+    void (async () => {
+      try {
+        const provider = await getWorkingReadProvider(net);
+        if (cancelled) return;
+        const erc20 = new ethers.Contract(tokenMeta.contractAddress, ERC20_ABI, provider);
+        const raw = await erc20.balanceOf(address);
         if (cancelled) return;
         const formatted = ethers.formatUnits(raw, tokenMeta.decimals);
         setPublicBalanceLabel(formatReadableBalance(formatted));
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setPublicBalanceLabel(null);
-      })
-      .finally(() => {
+      } finally {
         if (!cancelled) setBalanceLoading(false);
-      });
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [address, tokenMeta.contractAddress, tokenMeta.decimals, balanceTick]);
+  }, [address, shieldedRpcChainId, tokenMeta.contractAddress, tokenMeta.decimals, balanceTick]);
 
   async function handleSubmit() {
     if (!address) {
@@ -83,6 +93,8 @@ export default function ShieldPage() {
       return;
     }
     setSubmitting(true);
+    setSubmitError(null);
+    const net = getShieldedNetwork(shieldedRpcChainId);
     try {
       const noteId = crypto.randomUUID();
       const signer = await getBrowserSigner(address);
@@ -93,6 +105,7 @@ export default function ShieldPage() {
         viewingPub,
         tokenAddress: tokenMeta.contractAddress,
         amount: parsedAmount,
+        shieldedChainId: shieldedRpcChainId,
       });
       addNote({
         id: noteId,
@@ -117,6 +130,9 @@ export default function ShieldPage() {
       setSuccessNote(result.encryptedNote);
       setSuccessTxHash(result.txHash);
       setBalanceTick((n) => n + 1);
+    } catch (err) {
+      if (net) setSubmitError(formatWalletBroadcastError(err, net));
+      else setSubmitError(err instanceof Error ? err.message : String(err));
     } finally {
       setSubmitting(false);
     }
@@ -168,6 +184,9 @@ export default function ShieldPage() {
             <Button className="rounded-2xl" onClick={handleSubmit} disabled={submitting || Boolean(amountError)} icon={<ShieldCheck className="size-4" />}>
               {submitting ? "Registering note..." : "Shield via wallet"}
             </Button>
+            {submitError ? (
+              <p className="rounded-xl border border-amber-200/40 bg-amber-50/90 p-3 text-xs leading-relaxed text-amber-950">{submitError}</p>
+            ) : null}
             {amountError && !submitting ? (
               <p className="text-xs text-[#6b7280]">Fix amount input to continue.</p>
             ) : null}

@@ -1,7 +1,9 @@
 "use client";
 
 import {ethers} from "ethers";
-import {CONTRACTS, ERC20_ABI, POOL_ABI, POOL_DEPLOY_BLOCK, POSEIDON_ABI, SEPOLIA} from "./shielded-config";
+import {CHAIN_ID_ETH_SEPOLIA, getShieldedNetwork, type ShieldedChainId} from "./networks";
+import {getWorkingReadProvider} from "./rpc-read";
+import {ERC20_ABI, POOL_ABI, POSEIDON_ABI} from "./shielded-config";
 import {deriveOwnerPk, deriveUserKeys, keySeedFromWalletSignature, viewingPrivToPub} from "./keys";
 import {scanShieldedNotes, type DecryptedNote} from "./shielded";
 import type {TokenDefinition} from "./types";
@@ -20,13 +22,24 @@ async function hkdfSha256(ikm: Uint8Array, salt: Uint8Array, info: Uint8Array, l
   return new Uint8Array(bits);
 }
 
-export async function deriveShieldedKeysFromWallet(address: `0x${string}`, signMessage: (message: string) => Promise<`0x${string}`>) {
+function requireNet(chainId: ShieldedChainId) {
+  const net = getShieldedNetwork(chainId);
+  if (!net) throw new Error(`Unknown shielded chainId ${chainId}`);
+  return net;
+}
+
+export async function deriveShieldedKeysFromWallet(
+  address: `0x${string}`,
+  signMessage: (message: string) => Promise<`0x${string}`>,
+  shieldedChainId: ShieldedChainId = CHAIN_ID_ETH_SEPOLIA
+) {
+  const net = requireNet(shieldedChainId);
   const signature = await signMessage("Shielded key derivation consent (deterministic, no transaction)");
   const seed = keySeedFromWalletSignature(address, signature);
   const owner = deriveUserKeys(seed, "owner");
   const feeRecipient = deriveUserKeys(seed, "feeRecipient");
-  const provider = new ethers.JsonRpcProvider(SEPOLIA.rpcUrl, SEPOLIA.chainId);
-  const poseidon = new ethers.Contract(CONTRACTS.poseidon, POSEIDON_ABI, provider);
+  const provider = await getWorkingReadProvider(net);
+  const poseidon = new ethers.Contract(net.contracts.poseidon, POSEIDON_ABI, provider);
   const ownerPk = await deriveOwnerPk(owner.spendingKey, poseidon);
   const feeRecipientPk = await deriveOwnerPk(feeRecipient.spendingKey, poseidon);
   return {
@@ -38,12 +51,19 @@ export async function deriveShieldedKeysFromWallet(address: `0x${string}`, signM
   };
 }
 
-export async function scanPrivateState(viewingPriv: bigint, viewingPub: `0x${string}`, fromBlock = POOL_DEPLOY_BLOCK) {
-  const provider = new ethers.JsonRpcProvider(SEPOLIA.rpcUrl, SEPOLIA.chainId);
+export async function scanPrivateState(
+  viewingPriv: bigint,
+  viewingPub: `0x${string}`,
+  shieldedChainId: ShieldedChainId,
+  fromBlock?: number
+) {
+  const net = requireNet(shieldedChainId);
+  const provider = await getWorkingReadProvider(net);
+  const start = fromBlock ?? net.poolDeployBlock;
   return scanShieldedNotes({
     provider,
-    poolAddress: CONTRACTS.pool,
-    fromBlock,
+    poolAddress: net.contracts.pool,
+    fromBlock: start,
     viewingPriv,
     viewingPub,
   });
@@ -59,10 +79,11 @@ async function poseidonHash2(poseidon: ethers.Contract, a: bigint, b: bigint): P
   return toHex32(BigInt(out.toString()));
 }
 
-export async function resolveNoteStates(notes: DecryptedNote[], spendingKey: bigint) {
-  const provider = new ethers.JsonRpcProvider(SEPOLIA.rpcUrl, SEPOLIA.chainId);
-  const poseidon = new ethers.Contract(CONTRACTS.poseidon, POSEIDON_ABI, provider);
-  const pool = new ethers.Contract(CONTRACTS.pool, POOL_ABI, provider);
+export async function resolveNoteStates(notes: DecryptedNote[], spendingKey: bigint, shieldedChainId: ShieldedChainId) {
+  const net = requireNet(shieldedChainId);
+  const provider = await getWorkingReadProvider(net);
+  const poseidon = new ethers.Contract(net.contracts.poseidon, POSEIDON_ABI, provider);
+  const pool = new ethers.Contract(net.contracts.pool, POOL_ABI, provider);
 
   return Promise.all(
     notes.map(async (note) => {
@@ -83,11 +104,13 @@ export async function shieldDeposit(params: {
   viewingPub: `0x${string}`;
   tokenAddress: `0x${string}`;
   amount: bigint;
+  shieldedChainId: ShieldedChainId;
 }) {
-  const provider = new ethers.JsonRpcProvider(SEPOLIA.rpcUrl, SEPOLIA.chainId);
-  const poseidon = new ethers.Contract(CONTRACTS.poseidon, POSEIDON_ABI, provider);
+  const net = requireNet(params.shieldedChainId);
+  const readProvider = await getWorkingReadProvider(net);
+  const poseidon = new ethers.Contract(net.contracts.poseidon, POSEIDON_ABI, readProvider);
   const token = new ethers.Contract(params.tokenAddress, ERC20_ABI, params.signer);
-  const pool = new ethers.Contract(CONTRACTS.pool, POOL_ABI, params.signer);
+  const pool = new ethers.Contract(net.contracts.pool, POOL_ABI, params.signer);
   const tokenField = BigInt(ethers.zeroPadValue(params.tokenAddress, 32));
   const blinding = BigInt(ethers.randomBytes(31).reduce((acc, b) => (acc << 8n) + BigInt(b), 0n)) || 1n;
   const commitment = BigInt(await poseidon.hash([params.ownerPk, tokenField, params.amount, blinding]));
@@ -103,7 +126,7 @@ export async function shieldDeposit(params: {
   );
   const channel = ethers.keccak256(params.viewingPub);
   const subchannel = ethers.solidityPackedKeccak256(["bytes32", "uint64"], [channel, 0n]);
-  const approveTx = await token.approve(CONTRACTS.pool, params.amount);
+  const approveTx = await token.approve(net.contracts.pool, params.amount);
   await approveTx.wait();
   const shieldTx = await pool.shieldRouted(params.tokenAddress, params.amount, toHex32(commitment), envelope, channel, subchannel);
   await shieldTx.wait();

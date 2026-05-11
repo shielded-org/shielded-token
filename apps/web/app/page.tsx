@@ -8,7 +8,6 @@ import {MetricCard} from "@/components/ui/metric-card";
 import {StatusBadge} from "@/components/ui/status-badge";
 import {TOKENS} from "@/lib/constants";
 import {encodeShieldedAddress} from "@/lib/shielded-address";
-import {SEPOLIA} from "@/lib/shielded-config";
 import {
   formatAmount,
   formatUsd,
@@ -29,13 +28,14 @@ export default function DashboardPage() {
   const revealBalances = useShieldedStore((state) => state.revealBalances);
   const setRevealBalances = useShieldedStore((state) => state.setRevealBalances);
   const transactions = useShieldedStore((state) => state.transactions);
+  const shieldedRpcChainId = useShieldedStore((state) => state.shieldedRpcChainId);
   const isConnected = Boolean(walletAddress);
   const shieldedAddress =
     viewingPub && ownerPk
       ? encodeShieldedAddress({
           ownerPk: BigInt(ownerPk),
           viewingPub,
-          chainId: SEPOLIA.chainId,
+          chainId: shieldedRpcChainId,
         })
       : null;
   const totalBalance = getShieldedBalance(notes);

@@ -1,0 +1,48 @@
+{
+  "network": "base-sepolia",
+  "chainId": 84532,
+  "rpcUrl": "https://base-sepolia-rpc.publicnode.com",
+  "blockExplorer": "https://sepolia.basescan.org",
+  "deployer": "0x82E6d844629b734a118c339B9f80e404f117DF61",
+  "mintAmountHuman": "10000",
+  "recipients": [],
+  "tokens": [
+    {
+      "key": "USDC",
+      "name": "USD Coin",
+      "symbol": "USDC",
+      "decimals": 6,
+      "address": "0x120d58806E33b07d1eBd6946d4691b13e259712a"
+    },
+    {
+      "key": "USDT",
+      "name": "Tether USD",
+      "symbol": "USDT",
+      "decimals": 6,
+      "address": "0x6A3b629F9eB189E194B947CF84d47c60CCc6a1Df"
+    },
+    {
+      "key": "DAI",
+      "name": "Dai Stablecoin",
+      "symbol": "DAI",
+      "decimals": 18,
+      "address": "0x4f57D26465D51d1Bb91Ed44ae85F2245256B7cAa"
+    },
+    {
+      "key": "LINK",
+      "name": "ChainLink Token",
+      "symbol": "LINK",
+      "decimals": 18,
+      "address": "0x819EA63eB94992766c935B8C34D00b259cF45BF6"
+    }
+  ],
+  "deployedAt": "2026-05-11T16:10:01.758Z",
+  "lastMintAt": "2026-05-11T16:11:15.324Z",
+  "lastMintAmountHuman": "10000",
+  "lastMintRecipients": [
+    "0x8f4b1822646E0cF304115E731bb9A34b7c2F1414",
+    "0x0d2f361973BD0eF479989731b254BcbD65BB5CbF",
+    "0xd2827a2d71284e2E2f6F25da3f2f00d3491Cd951"
+  ],
+  "lastMintSigner": "0x82E6d844629b734a118c339B9f80e404f117DF61"
+}

@@ -5,19 +5,50 @@ import {ethers} from "ethers";
 
 const port = Number(process.env.RELAYER_PORT || 8787);
 const host = "0.0.0.0";
-const relayerRpcUrl = process.env.RELAYER_RPC_URL || process.env.LOCAL_RPC_URL || "";
+
+const CHAIN_ID_ETH_SEPOLIA = 11155111;
+const CHAIN_ID_BASE_SEPOLIA = 84532;
+
+const rpcEthSepolia = process.env.RELAYER_RPC_URL_ETH_SEPOLIA || "";
+const rpcBaseSepolia = process.env.RELAYER_RPC_URL_BASE_SEPOLIA || "";
+/** Primary JSON-RPC (defaults to Ethereum Sepolia chain id unless RELAYER_PRIMARY_CHAIN_ID is set, e.g. 31337 for Anvil). */
+const primaryRpc = process.env.RELAYER_RPC_URL || process.env.LOCAL_RPC_URL || "";
+const primaryChainId = Number(process.env.RELAYER_PRIMARY_CHAIN_ID || CHAIN_ID_ETH_SEPOLIA);
+
 const relayerPrivateKeysRaw = process.env.RELAYER_SIGNER_PRIVATE_KEYS || process.env.RELAYER_SIGNER_PRIVATE_KEY || "";
 const relayerPrivateKeys = relayerPrivateKeysRaw
   .split(",")
   .map((s) => s.trim())
-  .filter(Boolean);
+  .filter(Boolean)
+  .map((pk) => (pk.startsWith("0x") ? pk : `0x${pk}`));
+
 const confirmTimeoutMs = Number(process.env.RELAYER_CONFIRM_TIMEOUT_MS || 180_000);
 const confirmPollMs = Number(process.env.RELAYER_CONFIRM_POLL_MS || 2_000);
 /** Sepolia / many RPCs cap block gas target; raw tx gasLimit must stay under ~16.7M. */
 const defaultShieldedTransferGasLimit = Number(process.env.RELAYER_SHIELDED_TRANSFER_GAS_LIMIT || 16_000_000);
 
 const requests = new Map();
-const canSubmitOnchain = Boolean(relayerRpcUrl && relayerPrivateKeys.length > 0);
+
+/** @type {Map<number, import("ethers").NonceManager[]>} */
+const relayerSignersByChain = new Map();
+/** @type {Map<number, number>} */
+const signerCursorByChain = new Map();
+
+function initRelayerChain(chainId, rpcUrl) {
+  if (!rpcUrl || relayerSignersByChain.has(chainId)) return;
+  const provider = new ethers.JsonRpcProvider(rpcUrl);
+  const wallets = relayerPrivateKeys.map((pk) => new ethers.NonceManager(new ethers.Wallet(pk, provider)));
+  relayerSignersByChain.set(chainId, wallets);
+  signerCursorByChain.set(chainId, 0);
+}
+
+initRelayerChain(CHAIN_ID_ETH_SEPOLIA, rpcEthSepolia);
+initRelayerChain(CHAIN_ID_BASE_SEPOLIA, rpcBaseSepolia);
+const resolvedPrimary =
+  Number.isFinite(primaryChainId) && primaryChainId > 0 ? primaryChainId : CHAIN_ID_ETH_SEPOLIA;
+initRelayerChain(resolvedPrimary, primaryRpc);
+
+const canSubmitOnchain = relayerPrivateKeys.length > 0 && relayerSignersByChain.size > 0;
 
 const SHIELDED_TRANSFER_ABI = [
   "function shieldedTransferRouted(bytes proof, bytes32[2] nullifiers, bytes32[2] newCommitments, bytes[2] encryptedNotes, bytes32[2] channels, bytes32[2] subchannels, bytes32 merkleRoot, bytes32 token, uint256 fee, bytes32 feeRecipientPk) external",
@@ -38,18 +69,18 @@ const HONK_ERROR_SELECTORS = {
   "0xd71fd263": "PAIRING_FAILED()",
 };
 
-let relayerSigners = [];
-let signerCursor = 0;
-if (canSubmitOnchain) {
-  const provider = new ethers.JsonRpcProvider(relayerRpcUrl);
-  relayerSigners = relayerPrivateKeys.map((pk) => new ethers.NonceManager(new ethers.Wallet(pk, provider)));
+function pickRelayerSigner(chainId) {
+  const relayerSigners = relayerSignersByChain.get(chainId);
+  if (!relayerSigners?.length) return null;
+  let cursor = signerCursorByChain.get(chainId) ?? 0;
+  const signer = relayerSigners[cursor % relayerSigners.length];
+  signerCursorByChain.set(chainId, cursor + 1);
+  return signer;
 }
 
-function pickRelayerSigner() {
-  if (relayerSigners.length === 0) return null;
-  const signer = relayerSigners[signerCursor % relayerSigners.length];
-  signerCursor += 1;
-  return signer;
+function providerForChain(chainId) {
+  const first = relayerSignersByChain.get(chainId)?.[0];
+  return first?.provider ?? null;
 }
 
 function json(res, statusCode, payload) {
@@ -91,6 +122,7 @@ function buildBundleDebug(body) {
   const proof = body?.proof;
   const proofHex = typeof proof === "string" && proof.startsWith("0x") ? proof : null;
   return {
+    chainId: body?.chainId != null ? Number(body.chainId) : null,
     proofBytes: proofHex ? (proofHex.length - 2) / 2 : null,
     proofPrefix: toReasonableHex(proofHex, 16),
     nullifier0: toReasonableHex(body?.nullifiers?.[0]),
@@ -104,8 +136,20 @@ function buildBundleDebug(body) {
   };
 }
 
+function parseRelayChainId(body) {
+  if (body?.chainId == null || body.chainId === "") return CHAIN_ID_ETH_SEPOLIA;
+  const n = Number(body.chainId);
+  if (!Number.isFinite(n) || n <= 0) return NaN;
+  return n;
+}
+
 function validatePayload(body) {
   if (!body || typeof body !== "object") return "Missing payload";
+  const chainId = parseRelayChainId(body);
+  if (Number.isNaN(chainId)) return "Invalid chainId";
+  if (canSubmitOnchain && !relayerSignersByChain.has(chainId)) {
+    return `Relayer has no RPC configured for chainId ${chainId}`;
+  }
   if (!body.proof || !Array.isArray(body.nullifiers) || !Array.isArray(body.newCommitments)) {
     return "Invalid proof bundle shape";
   }
@@ -144,6 +188,11 @@ function validatePayload(body) {
 
 function validateUnshieldPayload(body) {
   if (!body || typeof body !== "object") return "Missing payload";
+  const chainId = parseRelayChainId(body);
+  if (Number.isNaN(chainId)) return "Invalid chainId";
+  if (canSubmitOnchain && !relayerSignersByChain.has(chainId)) {
+    return `Relayer has no RPC configured for chainId ${chainId}`;
+  }
   if (typeof body.proof !== "string" || !body.proof.startsWith("0x")) return "Invalid proof";
   const target = body.shieldedTarget ?? body.shieldedToken;
   if (typeof target !== "string" || !ethers.isAddress(target)) return "Missing or invalid shieldedTarget address";
@@ -168,13 +217,15 @@ function validateUnshieldPayload(body) {
 }
 
 async function submitShieldedTransferOnchain(body) {
+  const chainId = parseRelayChainId(body);
   const target = body.shieldedTarget ?? body.shieldedToken;
-  if (relayerSigners.length === 0) throw new Error("No relayer signer configured");
+  const relayerSigners = relayerSignersByChain.get(chainId);
+  if (!relayerSigners?.length) throw new Error(`No relayer signer configured for chainId ${chainId}`);
   const maxSignerAttempts = Math.max(relayerSigners.length, 1);
   let lastError = null;
 
   for (let attempt = 0; attempt < maxSignerAttempts; attempt += 1) {
-    const signer = pickRelayerSigner();
+    const signer = pickRelayerSigner(chainId);
     if (!signer) break;
     const contract = new ethers.Contract(target, SHIELDED_TRANSFER_ABI, signer);
     const sendShieldedTransfer = async () =>
@@ -194,7 +245,7 @@ async function submitShieldedTransferOnchain(body) {
 
     try {
       const tx = await sendShieldedTransfer();
-      return tx.hash;
+      return {txHash: tx.hash, chainId};
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const code = error?.code;
@@ -202,7 +253,7 @@ async function submitShieldedTransferOnchain(body) {
         signer.reset();
         try {
           const tx = await sendShieldedTransfer();
-          return tx.hash;
+          return {txHash: tx.hash, chainId};
         } catch (retryError) {
           lastError = retryError;
           if (isInsufficientFundsError(retryError)) continue;
@@ -227,12 +278,14 @@ async function submitShieldedTransferOnchain(body) {
 }
 
 async function submitUnshieldOnchain(body) {
+  const chainId = parseRelayChainId(body);
   const target = body.shieldedTarget ?? body.shieldedToken;
-  if (relayerSigners.length === 0) throw new Error("No relayer signer configured");
+  const relayerSigners = relayerSignersByChain.get(chainId);
+  if (!relayerSigners?.length) throw new Error(`No relayer signer configured for chainId ${chainId}`);
   let lastError = null;
   const maxSignerAttempts = Math.max(relayerSigners.length, 1);
   for (let attempt = 0; attempt < maxSignerAttempts; attempt += 1) {
-    const signer = pickRelayerSigner();
+    const signer = pickRelayerSigner(chainId);
     if (!signer) break;
     const contract = new ethers.Contract(target, UNSHIELD_ABI, signer);
     try {
@@ -249,7 +302,7 @@ async function submitUnshieldOnchain(body) {
         body.subchannel ?? ethers.ZeroHash,
         {gasLimit: body.gasLimit ?? defaultShieldedTransferGasLimit}
       );
-      return tx.hash;
+      return {txHash: tx.hash, chainId};
     } catch (error) {
       lastError = error;
       if (isInsufficientFundsError(error)) continue;
@@ -264,9 +317,8 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitForReceiptByPolling(txHash) {
+async function waitForReceiptByPolling(txHash, provider) {
   const startedAt = Date.now();
-  const provider = relayerSigners[0].provider;
   while (Date.now() - startedAt < confirmTimeoutMs) {
     const receipt = await provider.getTransactionReceipt(txHash);
     if (receipt) return receipt;
@@ -292,6 +344,7 @@ const server = http.createServer((req, res) => {
       ok: true,
       queueSize: requests.size,
       mode: canSubmitOnchain ? "onchain" : "stub",
+      chains: Array.from(relayerSignersByChain.keys()),
     });
   }
 
@@ -333,10 +386,12 @@ const server = http.createServer((req, res) => {
       const err = validatePayload(body);
       if (err) return json(res, 400, {accepted: false, error: err});
 
+      const chainId = parseRelayChainId(body);
       const requestId = randomUUID();
       const record = {
         accepted: true,
         requestId,
+        chainId,
         txHash: null,
         status: "queued",
         createdAt: new Date().toISOString(),
@@ -345,7 +400,7 @@ const server = http.createServer((req, res) => {
       requests.set(requestId, record);
       try {
         if (canSubmitOnchain) {
-          const txHash = await submitShieldedTransferOnchain(body);
+          const {txHash} = await submitShieldedTransferOnchain(body);
           const submitted = {
             ...record,
             txHash,
@@ -353,13 +408,21 @@ const server = http.createServer((req, res) => {
           };
           requests.set(requestId, submitted);
 
-          // Confirm asynchronously so API does not hang on unstable forks.
-          const provider = relayerSigners[0].provider;
+          const provider = providerForChain(chainId);
+          if (!provider) {
+            requests.set(requestId, {
+              ...submitted,
+              status: "failed",
+              error: `No provider for chainId ${chainId}`,
+            });
+            return json(res, 500, requests.get(requestId));
+          }
+
           void provider
             .getTransactionReceipt(txHash)
             .then(async (initialReceipt) => {
               if (initialReceipt) return initialReceipt;
-              return await waitForReceiptByPolling(txHash);
+              return await waitForReceiptByPolling(txHash, provider);
             })
             .then((receipt) => {
               const current = requests.get(requestId);
@@ -380,22 +443,24 @@ const server = http.createServer((req, res) => {
                 });
                 return;
               }
-              const providerForDiag = relayerSigners[0]?.provider;
               void (async () => {
                 let replayError = null;
                 let revertData = null;
                 let selector = null;
                 let selectorName = null;
-                if (providerForDiag && current.txHash) {
+                if (current.txHash) {
                   try {
-                    const tx = await providerForDiag.getTransaction(current.txHash);
+                    const tx = await provider.getTransaction(current.txHash);
                     if (tx) {
-                      await providerForDiag.call({
-                        to: tx.to,
-                        from: tx.from,
-                        data: tx.data,
-                        value: tx.value,
-                      }, tx.blockNumber ?? "latest");
+                      await provider.call(
+                        {
+                          to: tx.to,
+                          from: tx.from,
+                          data: tx.data,
+                          value: tx.value,
+                        },
+                        tx.blockNumber ?? "latest"
+                      );
                     }
                   } catch (err) {
                     replayError = err instanceof Error ? err.message : String(err);
@@ -474,10 +539,12 @@ const server = http.createServer((req, res) => {
       const err = validateUnshieldPayload(body);
       if (err) return json(res, 400, {accepted: false, error: err});
 
+      const chainId = parseRelayChainId(body);
       const requestId = randomUUID();
       const record = {
         accepted: true,
         requestId,
+        chainId,
         txHash: null,
         status: "queued",
         createdAt: new Date().toISOString(),
@@ -493,13 +560,21 @@ const server = http.createServer((req, res) => {
       requests.set(requestId, record);
       try {
         if (canSubmitOnchain) {
-          const txHash = await submitUnshieldOnchain(body);
+          const {txHash} = await submitUnshieldOnchain(body);
           const submitted = {...record, txHash, status: "submitted"};
           requests.set(requestId, submitted);
-          const provider = relayerSigners[0].provider;
+          const provider = providerForChain(chainId);
+          if (!provider) {
+            requests.set(requestId, {
+              ...submitted,
+              status: "failed",
+              error: `No provider for chainId ${chainId}`,
+            });
+            return json(res, 500, requests.get(requestId));
+          }
           void provider
             .getTransactionReceipt(txHash)
-            .then(async (initialReceipt) => initialReceipt ?? (await waitForReceiptByPolling(txHash)))
+            .then(async (initialReceipt) => initialReceipt ?? (await waitForReceiptByPolling(txHash, provider)))
             .then((receipt) => {
               const current = requests.get(requestId);
               if (!current) return;
@@ -546,4 +621,6 @@ const server = http.createServer((req, res) => {
 server.listen(port, host, () => {
   // eslint-disable-next-line no-console
   console.log(`Relayer listening on http://${host}:${port}`);
+  // eslint-disable-next-line no-console
+  console.log(`Chains (RPC configured): ${Array.from(relayerSignersByChain.keys()).join(", ") || "(none)"}`);
 });

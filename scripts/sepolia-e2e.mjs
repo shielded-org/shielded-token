@@ -141,7 +141,7 @@ async function relayShieldedTransfer(bundle) {
   const res = await fetch(`${RELAYER_URL}/relay/shielded-transfer`, {
     method: "POST",
     headers: {"content-type": "application/json"},
-    body: JSON.stringify(bundle),
+    body: JSON.stringify({chainId: TESTNET_CHAIN_ID, ...bundle}),
   });
   const payload = await res.json();
   if (!res.ok) {

@@ -1,8 +1,17 @@
-import {FormEvent, useEffect, useMemo, useRef, useState} from "react";
+import {FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState} from "react";
 import {ethers} from "ethers";
 import {Download, Lock} from "lucide-react";
 
-import {CONTRACTS, DEFAULT_POOL_TOKENS, ERC20_ABI, POOL_ABI, POOL_DEPLOY_BLOCK, POSEIDON_ABI, SEPOLIA} from "./config";
+import {ERC20_ABI, POOL_ABI, POSEIDON_ABI} from "./config";
+import {
+  CHAIN_ID_ETH_SEPOLIA,
+  defaultShieldedChainId,
+  getShieldedNetwork,
+  getShieldedNetworks,
+  normalizeStoredShieldedChainId,
+  type ShieldedChainId,
+} from "./networks";
+import {getWorkingReadProvider} from "./rpc-read";
 import {deriveOwnerPk, deriveUserKeys, keySeedFromPrivateKey, viewingPrivToPub} from "./keys";
 import {executePrivateTransfer, executeUnshield} from "./privateTransfer";
 import {scanShieldedNotes} from "./shielded";
@@ -40,6 +49,16 @@ type ScanCache = {
   viewingPub: `0x${string}`;
   lastScannedBlock: number;
   notes: DecryptedNote[];
+};
+
+type LedgerCallCtx = {
+  rpc: ethers.JsonRpcProvider;
+  tokens: ImportedToken[];
+  selected: `0x${string}`;
+  /** Pool network this read was started for; drop results if the user switched away (same idea as web `cancelled` flags). */
+  ledgerChainId: ShieldedChainId;
+  /** Effect cleanup sets this so in-flight work matches `apps/web` `cancelled` pattern. */
+  isCancelled?: () => boolean;
 };
 
 type ScanCacheJson = {
@@ -191,12 +210,14 @@ function persistImportedTokens(tokens: ImportedToken[]) {
   localStorage.setItem(IMPORTED_TOKENS_KEY, JSON.stringify(tokens));
 }
 
-function scanCacheKey(viewingPub: `0x${string}`) {
-  return `${SCAN_CACHE_PREFIX}:${SEPOLIA.chainId}:${CONTRACTS.pool.toLowerCase()}:${viewingPub.toLowerCase()}`;
+type ScanCacheCtx = {chainId: number; pool: string};
+
+function scanCacheStorageKey(ctx: ScanCacheCtx, viewingPub: `0x${string}`) {
+  return `${SCAN_CACHE_PREFIX}:${ctx.chainId}:${ctx.pool.toLowerCase()}:${viewingPub.toLowerCase()}`;
 }
 
-function readScanCache(viewingPub: `0x${string}`): ScanCache | null {
-  const raw = localStorage.getItem(scanCacheKey(viewingPub));
+function readScanCache(viewingPub: `0x${string}`, ctx: ScanCacheCtx): ScanCache | null {
+  const raw = localStorage.getItem(scanCacheStorageKey(ctx, viewingPub));
   if (!raw) return null;
   try {
     const parsed = JSON.parse(raw) as ScanCacheJson;
@@ -216,7 +237,7 @@ function readScanCache(viewingPub: `0x${string}`): ScanCache | null {
   }
 }
 
-function writeScanCache(cache: ScanCache) {
+function writeScanCache(cache: ScanCache, ctx: ScanCacheCtx) {
   const asJson: ScanCacheJson = {
     viewingPub: cache.viewingPub,
     lastScannedBlock: cache.lastScannedBlock,
@@ -228,7 +249,7 @@ function writeScanCache(cache: ScanCache) {
       txHash: n.txHash,
     })),
   };
-  localStorage.setItem(scanCacheKey(cache.viewingPub), JSON.stringify(asJson));
+  localStorage.setItem(scanCacheStorageKey(ctx, cache.viewingPub), JSON.stringify(asJson));
 }
 
 function clearAllScanCache() {
@@ -241,13 +262,67 @@ function clearAllScanCache() {
 }
 
 export default function App() {
-  const provider = useMemo(() => new ethers.JsonRpcProvider(SEPOLIA.rpcUrl, SEPOLIA.chainId), []);
+  const POOL_CHAIN_STORAGE = "shielded.poolChainId.v1";
+  const shieldedNetworks = useMemo(() => getShieldedNetworks(), []);
+  const [shieldedChainId, setShieldedChainId] = useState<ShieldedChainId>(() => {
+    try {
+      const raw = localStorage.getItem(POOL_CHAIN_STORAGE);
+      if (raw) return normalizeStoredShieldedChainId(Number(raw));
+    } catch {
+      /* ignore */
+    }
+    return defaultShieldedChainId();
+  });
+  const shieldedChainIdRef = useRef(shieldedChainId);
+  shieldedChainIdRef.current = shieldedChainId;
+  /** Web-style: effect `cancelled` + ref guard so stale RPC work never mutates UI. */
+  function shouldDropLedger(ctx: LedgerCallCtx): boolean {
+    return Boolean(ctx.isCancelled?.()) || shieldedChainIdRef.current !== ctx.ledgerChainId;
+  }
+  const activeNet = useMemo(
+    () => getShieldedNetwork(shieldedChainId) ?? getShieldedNetwork(CHAIN_ID_ETH_SEPOLIA)!,
+    [shieldedChainId]
+  );
+  const CONTRACTS = activeNet.contracts;
+  const POOL_DEPLOY_BLOCK = activeNet.poolDeployBlock;
+  const scanCtx = useMemo(
+    () => ({chainId: activeNet.id, pool: activeNet.contracts.pool}),
+    [activeNet.id, activeNet.contracts.pool]
+  );
+  const provider = useMemo(() => new ethers.JsonRpcProvider(activeNet.rpcUrl, activeNet.id), [activeNet.rpcUrl, activeNet.id]);
+
+  /** Bumps when user adds a custom token so `importedTokens` recomputes from localStorage. */
+  const [importedTokensRevision, setImportedTokensRevision] = useState(0);
+
+  const importedTokens = useMemo(() => {
+    const imported = loadImportedTokens();
+    const canonical: ImportedToken[] = [];
+    if (activeNet.contracts.token && activeNet.contracts.token !== ethers.ZeroAddress) {
+      canonical.push({address: activeNet.contracts.token as `0x${string}`, symbol: "TOKEN", decimals: 18});
+    }
+    for (const t of activeNet.defaultPoolTokens) {
+      canonical.push({address: t.address as `0x${string}`, symbol: t.symbol, decimals: t.decimals});
+    }
+    const canonicalLower = new Set(canonical.map((t) => t.address.toLowerCase()));
+    return [...canonical, ...imported.filter((t) => !canonicalLower.has(t.address.toLowerCase()))];
+  }, [activeNet, importedTokensRevision]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(POOL_CHAIN_STORAGE, String(shieldedChainId));
+    } catch {
+      /* ignore */
+    }
+  }, [shieldedChainId]);
+
   const [password, setPassword] = useState("");
   const [privateKey, setPrivateKey] = useState("");
   const [seedPhrase, setSeedPhrase] = useState("");
   const [seedPassphrase, setSeedPassphrase] = useState("");
   const [newWalletPhrase, setNewWalletPhrase] = useState("");
+  const walletRef = useRef<ethers.Wallet | null>(null);
   const [wallet, setWallet] = useState<ethers.Wallet | null>(null);
+  walletRef.current = wallet;
   const [showSensitiveKeys, setShowSensitiveKeys] = useState(false);
   const [derivedKeys, setDerivedKeys] = useState<{
     ownerPk: string;
@@ -261,8 +336,21 @@ export default function App() {
   const [tokenSymbol, setTokenSymbol] = useState("TOKEN");
   const [tokenDecimals, setTokenDecimals] = useState(18);
   const [selectedToken, setSelectedToken] = useState<`0x${string}`>(CONTRACTS.token as `0x${string}`);
+  /** Token on the active pool network (avoids stale `selectedToken` right after chain switch). */
+  const resolvedSelectedToken = useMemo((): `0x${string}` => {
+    const sel = selectedToken;
+    if (importedTokens.some((t) => t.address.toLowerCase() === sel.toLowerCase())) return sel;
+    const first = importedTokens[0]?.address;
+    if (first) return first as `0x${string}`;
+    return (CONTRACTS.token as `0x${string}`);
+  }, [importedTokens, selectedToken, CONTRACTS.token]);
+  const providerRef = useRef(provider);
+  const importedTokensRef = useRef(importedTokens);
+  const selectedTokenRef = useRef(resolvedSelectedToken);
+  providerRef.current = provider;
+  importedTokensRef.current = importedTokens;
+  selectedTokenRef.current = resolvedSelectedToken;
   const [publicTokenBalances, setPublicTokenBalances] = useState<Record<string, string>>({});
-  const [importedTokens, setImportedTokens] = useState<ImportedToken[]>([]);
   const [newTokenAddress, setNewTokenAddress] = useState("");
   const [shieldedSpendable, setShieldedSpendable] = useState("0");
   const [shieldedNotes, setShieldedNotes] = useState(0);
@@ -293,6 +381,8 @@ export default function App() {
   const [passphraseViewerOpen, setPassphraseViewerOpen] = useState(false);
   const [passphraseViewerText, setPassphraseViewerText] = useState("");
   const passwordPromptResolver = useRef<((value: string | null) => void) | null>(null);
+  const publicBalanceSnapshotRef = useRef<{eth: bigint; tokens: Record<string, bigint>} | null>(null);
+  const previousPoolChainRef = useRef<ShieldedChainId | null>(null);
 
   async function runAction(
     label: string,
@@ -321,19 +411,15 @@ export default function App() {
     }
   }
 
+  useLayoutEffect(() => {
+    setSelectedToken((prev) => {
+      if (importedTokens.some((t) => t.address.toLowerCase() === prev.toLowerCase())) return prev;
+      const first = importedTokens[0]?.address;
+      return (first ?? prev) as `0x${string}`;
+    });
+  }, [importedTokens, shieldedChainId]);
+
   useEffect(() => {
-    const imported = loadImportedTokens();
-    const canonical: ImportedToken[] = [
-      {address: CONTRACTS.token as `0x${string}`, symbol: "TOKEN", decimals: 18},
-      ...DEFAULT_POOL_TOKENS.map((t) => ({
-        address: t.address as `0x${string}`,
-        symbol: t.symbol,
-        decimals: t.decimals,
-      })),
-    ];
-    const canonicalLower = new Set(canonical.map((t) => t.address.toLowerCase()));
-    const merged = [...canonical, ...imported.filter((t) => !canonicalLower.has(t.address.toLowerCase()))];
-    setImportedTokens(merged);
     const vaultAccounts = listVaultAccountsMeta();
     setAccounts(vaultAccounts);
     if (vaultAccounts.length > 0) {
@@ -343,10 +429,28 @@ export default function App() {
     }
   }, []);
 
+  /** Same pattern as `apps/web/components/layout/app-shell.tsx` + shield page: cleanup `cancelled` + `getWorkingReadProvider`. */
   useEffect(() => {
     if (!wallet) return;
-    void refreshBalances(wallet);
-  }, [selectedToken]);
+    let cancelled = false;
+
+    const syncOnce = async () => {
+      try {
+        await refreshBalances(wallet, {isCancelled: () => cancelled});
+      } catch (err) {
+        if (!cancelled) console.warn("Ledger sync:", err);
+      }
+    };
+    void syncOnce();
+    const interval = window.setInterval(() => {
+      void syncOnce();
+    }, 15000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [wallet, shieldedChainId, resolvedSelectedToken, importedTokens]);
 
   useEffect(() => {
     if (!status) return;
@@ -361,11 +465,19 @@ export default function App() {
     return {owner, feeRecipient};
   }
 
-  async function ensureDerivedKeys(active: ethers.Wallet) {
+  async function ensureDerivedKeys(
+    active: ethers.Wallet,
+    ledgerChainId: ShieldedChainId,
+    readRpc: ethers.JsonRpcProvider,
+    isCancelled?: () => boolean
+  ) {
+    const net = getShieldedNetwork(ledgerChainId);
+    if (!net) return;
     const {owner, feeRecipient} = deriveShieldKeyMaterial(active);
-    const poseidon = new ethers.Contract(CONTRACTS.poseidon, POSEIDON_ABI, provider);
+    const poseidon = new ethers.Contract(net.contracts.poseidon, POSEIDON_ABI, readRpc);
     const ownerPk = await deriveOwnerPk(owner.spendingKey, poseidon);
     const feeRecipientPk = await deriveOwnerPk(feeRecipient.spendingKey, poseidon);
+    if (isCancelled?.() || shieldedChainIdRef.current !== ledgerChainId) return;
     setDerivedKeys({
       ownerPk: ownerPk.toString(),
       spendingKey: owner.spendingKey.toString(),
@@ -375,34 +487,72 @@ export default function App() {
     });
   }
 
-  async function refreshBalances(active: ethers.Wallet) {
-    const token = new ethers.Contract(selectedToken, ERC20_ABI, provider);
-    const poseidon = new ethers.Contract(CONTRACTS.poseidon, POSEIDON_ABI, provider);
-    const pool = new ethers.Contract(CONTRACTS.pool, POOL_ABI, provider);
-    const [ethBal, tokenBal, symbol, decimals] = await Promise.all([
-      provider.getBalance(active.address),
-      token.balanceOf(active.address),
-      token.symbol(),
-      token.decimals(),
-    ]);
+  async function refreshPublicLedger(
+    active: ethers.Wallet,
+    ctx: LedgerCallCtx
+  ): Promise<{symbol: string; decimals: number} | null> {
+    const {rpc, tokens, selected, ledgerChainId} = ctx;
+    const selectedLower = selected.toLowerCase();
+    const listMeta = tokens.find((t) => t.address.toLowerCase() === selectedLower);
+    let sym = listMeta?.symbol ?? "TOKEN";
+    let dec = listMeta?.decimals ?? 18;
+
+    let ethBal = 0n;
+    try {
+      ethBal = await rpc.getBalance(active.address);
+    } catch {
+      ethBal = 0n;
+    }
+
+    const token = new ethers.Contract(selected, ERC20_ABI, rpc);
+    let tokenBal = 0n;
+    try {
+      tokenBal = await token.balanceOf(active.address);
+    } catch {
+      tokenBal = 0n;
+    }
+    try {
+      const onChainSymbol = await token.symbol();
+      if (onChainSymbol != null && String(onChainSymbol).trim() !== "") sym = String(onChainSymbol);
+    } catch {
+      /* non-ERC20Metadata / empty 0x — use listMeta */
+    }
+    try {
+      const onChainDec = await token.decimals();
+      const n = Number(onChainDec);
+      if (Number.isFinite(n) && n >= 0 && n <= 36) dec = n;
+    } catch {
+      /* keep listMeta / default */
+    }
+
+    if (shouldDropLedger(ctx)) {
+      return null;
+    }
     setPublicEth(ethers.formatEther(ethBal));
-    setPublicToken(ethers.formatUnits(tokenBal, decimals));
-    setTokenSymbol(symbol);
-    setTokenDecimals(Number(decimals));
+    setPublicToken(ethers.formatUnits(tokenBal, dec));
+    setTokenSymbol(sym);
+    setTokenDecimals(dec);
     const allTokenBalances = await Promise.all(
-      importedTokens.map(async (t) => {
+      tokens.map(async (t) => {
         try {
-          const c = new ethers.Contract(t.address, ERC20_ABI, provider);
+          const c = new ethers.Contract(t.address, ERC20_ABI, rpc);
           const bal = await c.balanceOf(active.address);
           return [t.address.toLowerCase(), ethers.formatUnits(bal, t.decimals)] as const;
         } catch {
-          return [t.address.toLowerCase(), "0"] as const;
+          return [t.address.toLowerCase(), null] as const;
         }
       })
     );
-    const tokenBalanceBigints = Object.fromEntries(
-      allTokenBalances.map(([address, formatted], idx) => [address, ethers.parseUnits(formatted, importedTokens[idx]?.decimals || 18)])
-    );
+    const tokenBalanceBigints: Record<string, bigint> = {};
+    for (let i = 0; i < allTokenBalances.length; i += 1) {
+      const [address, formatted] = allTokenBalances[i];
+      const tokenMeta = tokens[i];
+      if (!tokenMeta || formatted == null) continue;
+      tokenBalanceBigints[address] = ethers.parseUnits(formatted, tokenMeta.decimals || 18);
+    }
+    if (shouldDropLedger(ctx)) {
+      return null;
+    }
     const currentEth = ethBal;
     const previousSnapshot = publicBalanceSnapshotRef.current;
     if (previousSnapshot) {
@@ -423,17 +573,17 @@ export default function App() {
           updatedAt: new Date().toISOString(),
         });
       }
-      for (const t of importedTokens) {
+      for (const t of tokens) {
         const key = t.address.toLowerCase();
         const curr = tokenBalanceBigints[key] || 0n;
-        const prev = previousSnapshot.tokens[key] || 0n;
-        if (curr > prev) {
+        const prevAmt = previousSnapshot.tokens[key] || 0n;
+        if (curr > prevAmt) {
           addActivityEntry({
             id: `incoming-token-${key}-${Date.now()}`,
             icon: "incoming",
             title: "Public Receive",
             subtitle: `Incoming ${t.symbol}`,
-            amount: `+ ${ethers.formatUnits(curr - prev, t.decimals)} ${t.symbol}`,
+            amount: `+ ${ethers.formatUnits(curr - prevAmt, t.decimals)} ${t.symbol}`,
             amountColor: "#22C55E",
             timeLabel: new Date().toISOString(),
             status: "completed",
@@ -445,28 +595,55 @@ export default function App() {
         }
       }
     }
-    setPublicTokenBalances(Object.fromEntries(allTokenBalances));
-    publicBalanceSnapshotRef.current = {eth: currentEth, tokens: tokenBalanceBigints};
+    setPublicTokenBalances((prev) => {
+      const merged = {...prev};
+      for (const [address, formatted] of allTokenBalances) {
+        if (formatted != null) merged[address] = formatted;
+      }
+      return merged;
+    });
+    const mergedSnapshot = previousSnapshot ? {...previousSnapshot.tokens} : {};
+    for (const [address, value] of Object.entries(tokenBalanceBigints)) {
+      mergedSnapshot[address] = value;
+    }
+    publicBalanceSnapshotRef.current = {eth: currentEth, tokens: mergedSnapshot};
+    await Promise.resolve();
+    if (shouldDropLedger(ctx)) {
+      return null;
+    }
+    return {symbol: sym, decimals: dec};
+  }
 
-    const {owner, feeRecipient} = deriveShieldKeyMaterial(active);
+  async function refreshShieldedLedger(
+    active: ethers.Wallet,
+    selectedMeta: {symbol: string; decimals: number},
+    ctx: LedgerCallCtx
+  ) {
+    const {rpc, tokens, selected, ledgerChainId} = ctx;
+    const net = getShieldedNetwork(ledgerChainId);
+    if (!net) return;
+    const scanCtxLocal = {chainId: net.id, pool: net.contracts.pool};
+    const poolDeployBlock = net.poolDeployBlock;
+    const poseidon = new ethers.Contract(net.contracts.poseidon, POSEIDON_ABI, rpc);
+    const pool = new ethers.Contract(net.contracts.pool, POOL_ABI, rpc);
+    const {owner} = deriveShieldKeyMaterial(active);
     const viewingPub = viewingPrivToPub(owner.viewingPriv);
-    const ownerPk = await deriveOwnerPk(owner.spendingKey, poseidon);
-    const feeRecipientPk = await deriveOwnerPk(feeRecipient.spendingKey, poseidon);
-    const cached = readScanCache(viewingPub);
+    const cached = readScanCache(viewingPub, scanCtxLocal);
     const cacheMatchesViewer = cached?.viewingPub === viewingPub;
     const scanFromBlock = cacheMatchesViewer
-      ? Math.max(POOL_DEPLOY_BLOCK, cached.lastScannedBlock + 1)
-      : POOL_DEPLOY_BLOCK;
+      ? Math.max(poolDeployBlock, cached.lastScannedBlock + 1)
+      : poolDeployBlock;
     const scan = await scanShieldedNotes({
-      provider,
-      poolAddress: CONTRACTS.pool as `0x${string}`,
+      provider: rpc,
+      poolAddress: net.contracts.pool as `0x${string}`,
       fromBlock: scanFromBlock,
       viewingPriv: owner.viewingPriv,
       viewingPub,
     });
+    if (shouldDropLedger(ctx)) return;
     const notes = cacheMatchesViewer ? [...(cached?.notes || []), ...scan.notes] : scan.notes;
     const tokenByFieldForIncoming = new Map<string, ImportedToken>();
-    for (const t of importedTokens) {
+    for (const t of tokens) {
       tokenByFieldForIncoming.set(ethers.zeroPadValue(t.address, 32).toLowerCase(), t);
     }
     for (const note of scan.notes) {
@@ -502,14 +679,14 @@ export default function App() {
       lastScannedBlock: scan.stats.latestBlock,
       notes: mergedNotes,
     };
-    writeScanCache(nextCache);
-    const selectedTokenField = ethers.zeroPadValue(selectedToken, 32).toLowerCase();
+    writeScanCache(nextCache, scanCtxLocal);
+    const selectedTokenField = ethers.zeroPadValue(selected, 32).toLowerCase();
     const tokenByField = new Map<string, ImportedToken>();
-    for (const t of importedTokens) {
+    for (const t of tokens) {
       tokenByField.set(ethers.zeroPadValue(t.address, 32).toLowerCase(), t);
     }
     if (!tokenByField.has(selectedTokenField)) {
-      tokenByField.set(selectedTokenField, {address: selectedToken, symbol: tokenSymbol, decimals: tokenDecimals});
+      tokenByField.set(selectedTokenField, {address: selected, symbol: selectedMeta.symbol, decimals: selectedMeta.decimals});
     }
     const totalsByField = new Map<string, {amount: bigint; notes: number}>();
     const usableNotes = mergedNotes
@@ -518,7 +695,9 @@ export default function App() {
     const nullifiers = await Promise.all(
       usableNotes.map(async (n) => ethers.zeroPadValue(ethers.toBeHex(await poseidon.hash_2(owner.spendingKey, BigInt(n.commitment))), 32))
     );
+    if (shouldDropLedger(ctx)) return;
     const spentFlags = await Promise.all(nullifiers.map((nf) => pool.nullifierSet(nf)));
+    if (shouldDropLedger(ctx)) return;
 
     let spendable = 0n;
     let count = 0;
@@ -539,7 +718,7 @@ export default function App() {
         count += 1;
       }
     }
-    setShieldedSpendable(ethers.formatUnits(spendable, Number(decimals)));
+    setShieldedSpendable(ethers.formatUnits(spendable, selectedMeta.decimals));
     setShieldedNotes(count);
     const balances: PrivateTokenBalance[] = [];
     for (const [field, totals] of totalsByField.entries()) {
@@ -554,20 +733,55 @@ export default function App() {
       });
     }
     balances.sort((a, b) => {
-      if (a.address.toLowerCase() === selectedToken.toLowerCase()) return -1;
-      if (b.address.toLowerCase() === selectedToken.toLowerCase()) return 1;
+      if (a.address.toLowerCase() === selected.toLowerCase()) return -1;
+      if (b.address.toLowerCase() === selected.toLowerCase()) return 1;
       return a.symbol.localeCompare(b.symbol);
     });
     setPrivateBalances(balances);
-    await ensureDerivedKeys(active);
+    if (shouldDropLedger(ctx)) return;
+    await ensureDerivedKeys(active, ledgerChainId, rpc, ctx.isCancelled);
     // Silent background sync; explicit actions surface user-facing notifications.
   }
 
-  async function refreshBalancesWithRetry(active: ethers.Wallet, attempts = 3) {
+  async function refreshBalances(
+    active: ethers.Wallet,
+    opts?: {awaitShielded?: boolean; isCancelled?: () => boolean}
+  ) {
+    const net = getShieldedNetwork(activeNet.id);
+    if (!net) return;
+    let readRpc: ethers.JsonRpcProvider;
+    try {
+      readRpc = await getWorkingReadProvider(net);
+    } catch (e) {
+      console.warn("getWorkingReadProvider failed:", e);
+      throw e;
+    }
+    const ledgerCtx: LedgerCallCtx = {
+      rpc: readRpc,
+      tokens: importedTokens,
+      selected: resolvedSelectedToken,
+      ledgerChainId: net.id,
+      isCancelled: opts?.isCancelled,
+    };
+    const meta = await refreshPublicLedger(active, ledgerCtx);
+    if (meta == null) return;
+    if (shouldDropLedger(ledgerCtx)) return;
+    await ensureDerivedKeys(active, ledgerCtx.ledgerChainId, readRpc, opts?.isCancelled);
+    const shieldedP = refreshShieldedLedger(active, meta, ledgerCtx);
+    if (opts?.awaitShielded) {
+      await shieldedP;
+    } else {
+      void shieldedP.catch((err) => {
+        console.warn("Shielded ledger sync failed:", err);
+      });
+    }
+  }
+
+  async function refreshBalancesWithRetry(active: ethers.Wallet, attempts = 3, awaitShielded = false) {
     let lastErr: unknown = null;
     for (let i = 0; i < attempts; i += 1) {
       try {
-        await refreshBalances(active);
+        await refreshBalances(active, {awaitShielded});
         return;
       } catch (err) {
         lastErr = err;
@@ -693,7 +907,7 @@ export default function App() {
       setWallet(next);
       setSelectedUnlockAccountId(accountId);
       setLastOpenedAccountId(accountId);
-      await refreshBalancesWithRetry(next);
+      await refreshBalancesWithRetry(next, 3, true);
     }, "Failed to switch account");
   }
 
@@ -745,10 +959,25 @@ export default function App() {
     await runAction("Importing token", async () => {
       const addr = ethers.getAddress(newTokenAddress.trim()) as `0x${string}`;
       const token = new ethers.Contract(addr, ERC20_ABI, provider);
-      const [symbol, decimals] = await Promise.all([token.symbol(), token.decimals()]);
-      const next = [...importedTokens.filter((t) => t.address.toLowerCase() !== addr.toLowerCase()), {address: addr, symbol, decimals: Number(decimals)}];
-      setImportedTokens(next);
-      persistImportedTokens(next);
+      let symbol = "TOKEN";
+      try {
+        const s = await token.symbol();
+        if (s != null && String(s).trim() !== "") symbol = String(s);
+      } catch {
+        /* empty 0x / non-ERC20Metadata */
+      }
+      let decimals = 18;
+      try {
+        const d = await token.decimals();
+        const n = Number(d);
+        if (Number.isFinite(n) && n >= 0 && n <= 36) decimals = n;
+      } catch {
+        /* keep default */
+      }
+      const raw = loadImportedTokens();
+      const updated = [...raw.filter((t) => t.address.toLowerCase() !== addr.toLowerCase()), {address: addr, symbol, decimals}];
+      persistImportedTokens(updated);
+      setImportedTokensRevision((n) => n + 1);
       setNewTokenAddress("");
       setStatus(`Imported token ${symbol} (${addr}).`);
       setRouteStack(["home"]);
@@ -784,7 +1013,7 @@ export default function App() {
       const {owner} = deriveShieldKeyMaterial(wallet);
       const viewingPub = viewingPrivToPub(owner.viewingPriv);
       const ownerPk = await deriveOwnerPk(owner.spendingKey, new ethers.Contract(CONTRACTS.poseidon, POSEIDON_ABI, provider));
-      const token = new ethers.Contract(selectedToken, ERC20_ABI, wallet);
+      const token = new ethers.Contract(resolvedSelectedToken, ERC20_ABI, wallet);
       const pool = new ethers.Contract(CONTRACTS.pool, POOL_ABI, wallet);
       const poseidon = new ethers.Contract(CONTRACTS.poseidon, POSEIDON_ABI, provider);
       const amount = ethers.parseUnits(shieldAmount, tokenDecimals);
@@ -797,7 +1026,7 @@ export default function App() {
           `Insufficient ${tokenSymbol} balance for shielding. Available=${ethers.formatUnits(balance, tokenDecimals)}, required=${ethers.formatUnits(amount, tokenDecimals)}`
         );
       }
-      const tokenField = BigInt(ethers.zeroPadValue(selectedToken, 32));
+      const tokenField = BigInt(ethers.zeroPadValue(resolvedSelectedToken, 32));
       // Always create two notes so 2-in private transfers are possible immediately.
       const firstChunk = amount / 2n;
       const secondChunk = amount - firstChunk;
@@ -823,7 +1052,7 @@ export default function App() {
         const encrypted = await encryptNoteECDH(note, viewingPub);
         const route = routeForRecipient(viewingPub, i);
         const shieldTx = await pool.shieldRouted(
-          selectedToken,
+          resolvedSelectedToken,
           chunkAmount,
           toHex32(commitment),
           encrypted,
@@ -843,7 +1072,7 @@ export default function App() {
         }
       }
       setShieldAmount("");
-      await refreshBalancesWithRetry(wallet, 5);
+      await refreshBalancesWithRetry(wallet, 5, true);
       setStatus(`Shielded ${shieldAmount} ${tokenSymbol} into private balance (${chunks.length} notes).`);
     }, "Shield failed", 180000);
     if (!ok) {
@@ -881,7 +1110,7 @@ export default function App() {
         const senderOwnerPk = await deriveOwnerPk(sender.spendingKey, poseidon);
         if (!senderOwnerPk) throw new Error("Failed to derive sender owner pk");
         const senderViewingPub = viewingPrivToPub(sender.viewingPriv);
-        const senderCache = readScanCache(senderViewingPub);
+        const senderCache = readScanCache(senderViewingPub, scanCtx);
         const requestedAmount = ethers.parseUnits(sendAmount, tokenDecimals);
         const recipientKeys = advancedRecipientMode
           ? {
@@ -889,11 +1118,14 @@ export default function App() {
               viewingPub: recipientViewingPub as `0x${string}`,
             }
           : decodeShieldedAddress(recipientShieldedAddress.trim());
-        if ("chainId" in recipientKeys && recipientKeys.chainId !== SEPOLIA.chainId) {
-          throw new Error(`Shielded address chainId ${recipientKeys.chainId} does not match Sepolia (${SEPOLIA.chainId}).`);
+        if ("chainId" in recipientKeys && recipientKeys.chainId !== shieldedChainId) {
+          throw new Error(
+            `Shielded address chainId ${recipientKeys.chainId} does not match selected pool network (${shieldedChainId}).`
+          );
         }
         const result = await executePrivateTransfer({
           relayerUrl,
+          shieldedChainId,
           senderSpendingKey: sender.spendingKey,
           senderOwnerPk,
           senderViewingPriv: sender.viewingPriv,
@@ -908,7 +1140,7 @@ export default function App() {
           scanFromBlock: senderCache ? Math.max(POOL_DEPLOY_BLOCK, senderCache.lastScannedBlock + 1) : POOL_DEPLOY_BLOCK,
           cachedNotes: senderCache?.notes ?? [],
           maxRecipientAmount: requestedAmount,
-          tokenAddress: selectedToken,
+          tokenAddress: resolvedSelectedToken,
         });
         if (!result.requestId) throw new Error("Relayer did not return requestId");
         updateActivityEntry(pendingId, {detail: `Relayer request submitted (${result.requestId}). Waiting confirmation...`});
@@ -920,7 +1152,7 @@ export default function App() {
           detail: "Private transfer confirmed.",
         });
         setStatus(`Private transfer confirmed. Delivered ${ethers.formatUnits(BigInt(result.recipientAmount || "0"), tokenDecimals)} ${tokenSymbol}.`);
-        await refreshBalancesWithRetry(wallet);
+        await refreshBalancesWithRetry(wallet, 3, true);
       }, "Private transfer failed", 300000);
       if (!ok) {
         markActivityFailed(pendingId, "Private transfer failed.");
@@ -951,12 +1183,12 @@ export default function App() {
         updateActivityEntry(pendingPublicId, {txHash: tx.hash, detail: "Waiting for onchain confirmation..."});
         await tx.wait();
       } else {
-        const token = new ethers.Contract(selectedToken, ERC20_ABI, wallet);
+        const token = new ethers.Contract(resolvedSelectedToken, ERC20_ABI, wallet);
         const tx = await token.transfer(sendTo, ethers.parseUnits(sendAmount || "0", tokenDecimals));
         updateActivityEntry(pendingPublicId, {txHash: tx.hash, detail: "Waiting for token transfer confirmation..."});
         await tx.wait();
       }
-      await refreshBalancesWithRetry(wallet);
+      await refreshBalancesWithRetry(wallet, 3, true);
       updateActivityEntry(pendingPublicId, {status: "completed", detail: "Public transfer confirmed."});
       setStatus("Public transfer confirmed.");
     }, "Transfer failed");
@@ -996,10 +1228,11 @@ export default function App() {
       const poseidon = new ethers.Contract(CONTRACTS.poseidon, POSEIDON_ABI, provider);
       const senderOwnerPk = await deriveOwnerPk(owner.spendingKey, poseidon);
       const senderViewingPub = viewingPrivToPub(owner.viewingPriv);
-      const senderCache = readScanCache(senderViewingPub);
+      const senderCache = readScanCache(senderViewingPub, scanCtx);
       setStatus("Submitting unshield: scanning notes and preparing proof...");
       const result = await executeUnshield({
         relayerUrl,
+        shieldedChainId,
         senderSpendingKey: owner.spendingKey,
         senderViewingPriv: owner.viewingPriv,
         senderViewingPub,
@@ -1012,7 +1245,7 @@ export default function App() {
         },
         scanFromBlock: senderCache ? Math.max(POOL_DEPLOY_BLOCK, senderCache.lastScannedBlock + 1) : POOL_DEPLOY_BLOCK,
         cachedNotes: senderCache?.notes ?? [],
-        tokenAddress: selectedToken,
+        tokenAddress: resolvedSelectedToken,
       });
       if (!result.requestId) throw new Error("Relayer did not return requestId");
       updateActivityEntry(pendingUnshieldId, {detail: `Relayer request submitted (${result.requestId}). Waiting confirmation...`});
@@ -1025,7 +1258,7 @@ export default function App() {
         detail: "Unshield confirmed.",
       });
       setUnshieldAmount("");
-      await refreshBalancesWithRetry(wallet, 5);
+      await refreshBalancesWithRetry(wallet, 5, true);
       setStatus(`Unshield confirmed. Sent ${unshieldAmount} ${tokenSymbol} to ${recipient}.`);
     }, "Unshield failed", 300000);
     if (!ok) {
@@ -1123,7 +1356,27 @@ export default function App() {
     if (mapped === "send") setSendTokenStep("list");
     setRouteStack([mapped]);
   };
-  const publicBalanceSnapshotRef = useRef<{eth: bigint; tokens: Record<string, bigint>} | null>(null);
+
+  useLayoutEffect(() => {
+    const prev = previousPoolChainRef.current;
+    if (prev === null) {
+      previousPoolChainRef.current = shieldedChainId;
+      return;
+    }
+    if (prev === shieldedChainId) return;
+    previousPoolChainRef.current = shieldedChainId;
+    publicBalanceSnapshotRef.current = null;
+    setPrivateBalances([]);
+    setShieldedSpendable("0");
+    setShieldedNotes(0);
+    const cleared: Record<string, string> = {};
+    for (const t of importedTokens) cleared[t.address.toLowerCase()] = "0";
+    setPublicTokenBalances(cleared);
+    setPublicEth("0");
+    setPublicToken("0");
+    setTokenSymbol("TOKEN");
+    setTokenDecimals(18);
+  }, [shieldedChainId, importedTokens]);
 
   useEffect(() => {
     localStorage.setItem(ACTIVITY_CACHE_KEY, JSON.stringify(activity));
@@ -1155,17 +1408,19 @@ export default function App() {
   const selectedShieldedToken = tokenDetailAddress
     ? privateBalances.find((balance) => balance.address.toLowerCase() === tokenDetailAddress.toLowerCase()) || null
     : null;
-  const selectedImportedToken = importedTokens.find((token) => token.address.toLowerCase() === selectedToken.toLowerCase()) || null;
-  const selectedUnshieldableToken = privateBalances.find((balance) => balance.address.toLowerCase() === selectedToken.toLowerCase()) || null;
+  const selectedImportedToken =
+    importedTokens.find((token) => token.address.toLowerCase() === resolvedSelectedToken.toLowerCase()) || null;
+  const selectedUnshieldableToken =
+    privateBalances.find((balance) => balance.address.toLowerCase() === resolvedSelectedToken.toLowerCase()) || null;
   const selectedUnshieldableAmount = selectedUnshieldableToken?.spendableAmount || "0";
-  const selectedPublicSendableAmount = publicTokenBalances[selectedToken.toLowerCase()] || "0";
+  const selectedPublicSendableAmount = publicTokenBalances[resolvedSelectedToken.toLowerCase()] || "0";
   const activeAccount = accounts.find((account) => account.id === selectedUnlockAccountId) || accounts[0] || null;
   const activeTx = activeTxId ? activity.find((entry) => entry.id === activeTxId) || null : null;
   const shieldedAddress = derivedKeys
     ? encodeShieldedAddress({
         ownerPk: BigInt(derivedKeys.ownerPk),
         viewingPub: derivedKeys.viewingPub as `0x${string}`,
-        chainId: SEPOLIA.chainId,
+        chainId: activeNet.id,
       })
     : "";
 
@@ -1183,7 +1438,7 @@ export default function App() {
         const pk = await unlockVaultAccount(last.id, passwordToUse);
         const next = new ethers.Wallet(pk, provider);
         setWallet(next);
-        await refreshBalancesWithRetry(next);
+        await refreshBalancesWithRetry(next, 3, true);
       }
       setShowAccountDropdown(false);
       setStatus("New account created.");
@@ -1280,6 +1535,10 @@ export default function App() {
             onToggleAccounts={() => setShowAccountDropdown((v) => !v)}
             activeAccountName={activeAccount?.name || "Account"}
             accountsOpen={showAccountDropdown}
+            onCloseAccountsDropdown={() => setShowAccountDropdown(false)}
+            shieldedNetworks={shieldedNetworks}
+            shieldedChainId={shieldedChainId}
+            onShieldedChainChange={(id) => setShieldedChainId(normalizeStoredShieldedChainId(id))}
           />
           {showAccountDropdown && (
             <button type="button" className="account-dropdown-backdrop" aria-label="Close account dropdown" onClick={() => setShowAccountDropdown(false)} />
@@ -1385,11 +1644,11 @@ export default function App() {
                     <Card>
                       <p className="label">Token</p>
                       <p>{selectedImportedToken?.symbol || "Token"}</p>
-                      <p className="muted">Balance: {Number(publicTokenBalances[selectedToken.toLowerCase()] || "0").toFixed(4)} {selectedImportedToken?.symbol || ""}</p>
+                      <p className="muted">Balance: {Number(publicTokenBalances[resolvedSelectedToken.toLowerCase()] || "0").toFixed(4)} {selectedImportedToken?.symbol || ""}</p>
                     </Card>
                     {shieldFlowMode === "shield" ? (
                       <>
-                        <Input value={shieldAmount} onChange={(e) => setShieldAmount(e.target.value)} rightSlot={<Button type="button" variant="ghost" fullWidth={false} onClick={() => setShieldAmount(publicTokenBalances[selectedToken.toLowerCase()] || "0")}>MAX</Button>} />
+                        <Input value={shieldAmount} onChange={(e) => setShieldAmount(e.target.value)} rightSlot={<Button type="button" variant="ghost" fullWidth={false} onClick={() => setShieldAmount(publicTokenBalances[resolvedSelectedToken.toLowerCase()] || "0")}>MAX</Button>} />
                         <p className="muted">Your funds will be split into 2 private notes for flexible spending.</p>
                         <Button type="submit">Shield Funds</Button>
                       </>
@@ -1599,7 +1858,13 @@ export default function App() {
                           try {
                             const passwordToUse = await ensureSessionPassword("Enter wallet password to reveal key material");
                             if (!passwordToUse) return;
-                            if (wallet) await ensureDerivedKeys(wallet);
+                            if (wallet) {
+                              const n = getShieldedNetwork(activeNet.id);
+                              if (n) {
+                                const r = await getWorkingReadProvider(n);
+                                await ensureDerivedKeys(wallet, activeNet.id, r, undefined);
+                              }
+                            }
                             setShowSensitiveKeys(true);
                           } catch (err) {
                             setStatus(`Failed to verify password: ${String(err)}`);

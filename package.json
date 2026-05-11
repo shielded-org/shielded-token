@@ -19,6 +19,7 @@
     "check:sdk": "npm run check --workspace @zkproject/sdk",
     "test:contracts": "cd packages/contracts && forge test",
     "build:contracts": "cd packages/contracts && forge build",
+    "deploy:pool:base-sepolia": "node scripts/base-sepolia-pool-deploy.mjs",
     "deploy:mock-tokens-batch": "node scripts/deploy-mock-erc20-batch.mjs",
     "mint:mock-tokens-batch": "MINT_ONLY=1 node scripts/deploy-mock-erc20-batch.mjs",
     "build:circuits": "cd packages/circuits && nargo compile",
