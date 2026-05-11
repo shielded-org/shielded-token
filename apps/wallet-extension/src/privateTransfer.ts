@@ -1,6 +1,7 @@
 import {ethers} from "ethers";
 
-import {CONTRACTS, POOL_ABI, POOL_DEPLOY_BLOCK, POSEIDON_ABI, SEPOLIA} from "./config";
+import {POOL_ABI, POSEIDON_ABI} from "./config";
+import {CHAIN_ID_ETH_SEPOLIA, getShieldedNetwork, type ShieldedChainId} from "./networks";
 import {buildInputMerklePaths, buildMerklePathForCommitment} from "./merkle";
 import {generateProof, generateUnshieldProof} from "./proving";
 import {scanShieldedNotes} from "./shielded";
@@ -21,6 +22,12 @@ function normalizeTokenField(tokenLike: string): string | null {
   } catch {
     return null;
   }
+}
+
+function requireNet(chainId: ShieldedChainId) {
+  const net = getShieldedNetwork(chainId);
+  if (!net) throw new Error(`Unknown shielded chainId ${chainId}`);
+  return net;
 }
 
 function routeForRecipient(viewingPubHex: `0x${string}`, subchannelId: number) {
@@ -91,6 +98,7 @@ async function noteCommitment(
 
 export async function executePrivateTransfer(params: {
   relayerUrl: string;
+  shieldedChainId?: ShieldedChainId;
   senderSpendingKey: bigint;
   senderOwnerPk: bigint;
   senderViewingPriv: bigint;
@@ -104,22 +112,24 @@ export async function executePrivateTransfer(params: {
   maxRecipientAmount?: bigint;
   tokenAddress?: `0x${string}`;
 }) {
+  const chainId = params.shieldedChainId ?? CHAIN_ID_ETH_SEPOLIA;
+  const net = requireNet(chainId);
   const status = params.onStatus ?? (() => {});
   const relayerTimeoutMs = params.relayerRequestTimeoutMs ?? 120000;
   const startedAt = Date.now();
   const mark = (msg: string) => status(`${msg} (+${((Date.now() - startedAt) / 1000).toFixed(1)}s)`);
 
-  const provider = new ethers.JsonRpcProvider(SEPOLIA.rpcUrl, SEPOLIA.chainId);
-  const poseidon = new ethers.Contract(CONTRACTS.poseidon, POSEIDON_ABI, provider);
-  const pool = new ethers.Contract(CONTRACTS.pool, POOL_ABI, provider);
-  const selectedToken = params.tokenAddress ?? (CONTRACTS.token as `0x${string}`);
+  const provider = new ethers.JsonRpcProvider(net.rpcUrl, net.id);
+  const poseidon = new ethers.Contract(net.contracts.poseidon, POSEIDON_ABI, provider);
+  const pool = new ethers.Contract(net.contracts.pool, POOL_ABI, provider);
+  const selectedToken = params.tokenAddress ?? net.contracts.token;
   const tokenField = ethers.zeroPadValue(selectedToken, 32) as `0x${string}`;
   const tokenFieldNorm = tokenField.toLowerCase();
-  const scanFromBlock = params.scanFromBlock ?? POOL_DEPLOY_BLOCK;
+  const scanFromBlock = params.scanFromBlock ?? net.poolDeployBlock;
   mark(`Scanning shielded notes from block ${scanFromBlock}`);
   const scan = await scanShieldedNotes({
     provider,
-    poolAddress: CONTRACTS.pool as `0x${string}`,
+    poolAddress: net.contracts.pool,
     fromBlock: scanFromBlock,
     viewingPriv: params.senderViewingPriv,
     viewingPub: params.senderViewingPub,
@@ -190,17 +200,19 @@ export async function executePrivateTransfer(params: {
   const merkle = in1
     ? await buildInputMerklePaths({
         provider,
-        poseidonAddress: CONTRACTS.poseidon as `0x${string}`,
-        merkleTreeAddress: CONTRACTS.merkleTree as `0x${string}`,
+        poseidonAddress: net.contracts.poseidon,
+        merkleTreeAddress: net.contracts.merkleTree,
         targetCommitments: [in0.commitment, in1.commitment],
+        poolDeployBlock: net.poolDeployBlock,
       })
     : (() => null)();
   const merkleSingle = !in1
     ? await buildMerklePathForCommitment({
         provider,
-        poseidonAddress: CONTRACTS.poseidon as `0x${string}`,
-        merkleTreeAddress: CONTRACTS.merkleTree as `0x${string}`,
+        poseidonAddress: net.contracts.poseidon,
+        merkleTreeAddress: net.contracts.merkleTree,
         targetCommitment: in0.commitment,
+        poolDeployBlock: net.poolDeployBlock,
       })
     : null;
   const zero32 = "0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`;
@@ -249,7 +261,8 @@ export async function executePrivateTransfer(params: {
       headers: {"content-type": "application/json"},
       signal: controller.signal,
       body: JSON.stringify({
-        shieldedTarget: CONTRACTS.pool,
+        chainId,
+        shieldedTarget: net.contracts.pool,
         proof: proof.proof,
         nullifiers: [nullifier0, nullifier1],
         newCommitments: [outCommitment0, outCommitment1],
@@ -290,6 +303,7 @@ export async function executePrivateTransfer(params: {
 
 export async function executeUnshield(params: {
   relayerUrl: string;
+  shieldedChainId?: ShieldedChainId;
   senderSpendingKey: bigint;
   senderViewingPriv: bigint;
   senderViewingPub: `0x${string}`;
@@ -302,23 +316,25 @@ export async function executeUnshield(params: {
   cachedNotes?: DecryptedNote[];
   tokenAddress?: `0x${string}`;
 }) {
+  const chainId = params.shieldedChainId ?? CHAIN_ID_ETH_SEPOLIA;
+  const net = requireNet(chainId);
   const status = params.onStatus ?? (() => {});
   const relayerTimeoutMs = params.relayerRequestTimeoutMs ?? 120000;
   const startedAt = Date.now();
   const mark = (msg: string) => status(`${msg} (+${((Date.now() - startedAt) / 1000).toFixed(1)}s)`);
 
-  const provider = new ethers.JsonRpcProvider(SEPOLIA.rpcUrl, SEPOLIA.chainId);
-  const poseidon = new ethers.Contract(CONTRACTS.poseidon, POSEIDON_ABI, provider);
-  const pool = new ethers.Contract(CONTRACTS.pool, POOL_ABI, provider);
-  const selectedToken = params.tokenAddress ?? (CONTRACTS.token as `0x${string}`);
+  const provider = new ethers.JsonRpcProvider(net.rpcUrl, net.id);
+  const poseidon = new ethers.Contract(net.contracts.poseidon, POSEIDON_ABI, provider);
+  const pool = new ethers.Contract(net.contracts.pool, POOL_ABI, provider);
+  const selectedToken = params.tokenAddress ?? net.contracts.token;
   const tokenField = ethers.zeroPadValue(selectedToken, 32) as `0x${string}`;
   const tokenFieldNorm = tokenField.toLowerCase();
-  const scanFromBlock = params.scanFromBlock ?? POOL_DEPLOY_BLOCK;
+  const scanFromBlock = params.scanFromBlock ?? net.poolDeployBlock;
 
   mark(`Scanning shielded notes from block ${scanFromBlock}`);
   const scan = await scanShieldedNotes({
     provider,
-    poolAddress: CONTRACTS.pool as `0x${string}`,
+    poolAddress: net.contracts.pool,
     fromBlock: scanFromBlock,
     viewingPriv: params.senderViewingPriv,
     viewingPub: params.senderViewingPub,
@@ -375,9 +391,10 @@ export async function executeUnshield(params: {
   const nullifier = await poseidonHash2(poseidon, params.senderSpendingKey, BigInt(note.commitment));
   const merkle = await buildMerklePathForCommitment({
     provider,
-    poseidonAddress: CONTRACTS.poseidon as `0x${string}`,
-    merkleTreeAddress: CONTRACTS.merkleTree as `0x${string}`,
+    poseidonAddress: net.contracts.poseidon,
+    merkleTreeAddress: net.contracts.merkleTree,
     targetCommitment: note.commitment,
+    poolDeployBlock: net.poolDeployBlock,
   });
 
   mark("Generating unshield proof");
@@ -411,7 +428,8 @@ export async function executeUnshield(params: {
       headers: {"content-type": "application/json"},
       signal: controller.signal,
       body: JSON.stringify({
-        shieldedTarget: CONTRACTS.pool,
+        chainId,
+        shieldedTarget: net.contracts.pool,
         proof: proof.proof,
         nullifier,
         token: selectedToken,

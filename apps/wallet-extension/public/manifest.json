@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Shielded",
   "version": "0.1.0",
-  "description": "EOA wallet with Sepolia shielded pool discovery and transfer controls.",
+  "description": "EOA wallet with Ethereum Sepolia and Base Sepolia shielded pool discovery and transfers.",
   "action": {
     "default_popup": "index.html",
     "default_icon": {
@@ -24,6 +24,7 @@
   "permissions": ["storage"],
   "host_permissions": [
     "https://ethereum-sepolia-rpc.publicnode.com/*",
+    "https://base-sepolia-rpc.publicnode.com/*",
     "http://127.0.0.1:8787/*",
     "http://localhost:8787/*",
     "http://0.0.0.0:8787/*"

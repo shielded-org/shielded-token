@@ -1,27 +1,22 @@
+import {CHAIN_ID_ETH_SEPOLIA, getShieldedNetwork} from "./networks";
+
+const eth = getShieldedNetwork(CHAIN_ID_ETH_SEPOLIA)!;
+
+/** @deprecated Use getShieldedNetwork(chainId) for multi-chain */
 export const SEPOLIA = {
-  chainId: 11155111,
-  rpcUrl: "https://ethereum-sepolia-rpc.publicnode.com",
-  explorerBaseUrl: "https://sepolia.etherscan.io",
+  chainId: eth.id,
+  rpcUrl: eth.rpcUrl,
+  explorerBaseUrl: eth.explorerBaseUrl,
 };
 
-export const CONTRACTS = {
-  poseidon: "0xa9CC305Af95542673aea1518881B6F1E7A8DE3b8",
-  poseidonHasher: "0xE6d12EfF9db5FDb548Aa17Ad1587623FFAe3BE96",
-  verifier: "0xf45A783A47c68570b9D786a291e934F6A6B70950",
-  merkleTree: "0x3C4A041C4145B7FEF8C341Ca10D162A717adcc7A",
-  pool: "0xDd10f44Bc04451f0e1B698F5a8422f56d0d05966",
-  token: "0x9DBEd8AB4A05b5E4b6aF3bf61AA3051F6caa91b4",
-};
+/** @deprecated Use getShieldedNetwork(chainId).contracts */
+export const CONTRACTS = eth.contracts;
 
-/** Sepolia mock ERC20 batch — shown in token list alongside legacy CONTRACTS.token */
-export const DEFAULT_POOL_TOKENS = [
-  {address: "0x093856dc11cbEFeBb6c53E112F85E807D44ca9c2" as const, symbol: "USDC", decimals: 6},
-  {address: "0x70bdC729406Ee9C547522529f43F48028FCf374A" as const, symbol: "USDT", decimals: 6},
-  {address: "0xDc256389b94e511caEe10A75F1FE4246c185c288" as const, symbol: "DAI", decimals: 18},
-  {address: "0xFFBeF846263Af332CF34f7AC1F54aD09745c8c05" as const, symbol: "LINK", decimals: 18},
-] as const;
+/** @deprecated Use getShieldedNetwork(chainId).defaultPoolTokens */
+export const DEFAULT_POOL_TOKENS = eth.defaultPoolTokens;
 
-export const POOL_DEPLOY_BLOCK = 10744004;
+/** @deprecated Use getShieldedNetwork(chainId).poolDeployBlock */
+export const POOL_DEPLOY_BLOCK = eth.poolDeployBlock;
 
 export const POOL_ABI = [
   "event RoutedCommitment(bytes32 indexed channel, bytes32 indexed subchannel, bytes encryptedNote)",
