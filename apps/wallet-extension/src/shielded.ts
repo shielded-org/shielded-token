@@ -14,6 +14,25 @@ function toHex32(v: bigint): `0x${string}` {
   return ethers.zeroPadValue(ethers.toBeHex(v), 32) as `0x${string}`;
 }
 
+async function ethGetLogsRange(
+  provider: ethers.JsonRpcProvider,
+  address: `0x${string}`,
+  topics: (string | string[] | null)[],
+  fromBlock: number,
+  toBlock: number
+): Promise<ethers.Log[]> {
+  if (fromBlock > toBlock) return [];
+  try {
+    return await provider.getLogs({address, fromBlock, toBlock, topics});
+  } catch (e) {
+    if (fromBlock === toBlock) throw e;
+    const mid = Math.floor((fromBlock + toBlock) / 2);
+    const left = await ethGetLogsRange(provider, address, topics, fromBlock, mid);
+    const right = await ethGetLogsRange(provider, address, topics, mid + 1, toBlock);
+    return [...left, ...right];
+  }
+}
+
 async function getLogsChunked(params: {
   provider: ethers.JsonRpcProvider;
   address: `0x${string}`;
@@ -22,19 +41,35 @@ async function getLogsChunked(params: {
   topics: (string | string[] | null)[];
   chunkSize?: number;
 }) {
+  const sizes = [params.chunkSize ?? 50_000, 50_000, 20_000, 10_000, 5_000, 2_000, 1_000, 500];
+  const trySizes = [...new Set(sizes)].sort((a, b) => b - a);
   const out: ethers.Log[] = [];
-  const chunkSize = params.chunkSize ?? 50_000;
   let start = params.fromBlock;
   while (start <= params.toBlock) {
-    const end = Math.min(start + chunkSize - 1, params.toBlock);
-    const part = await params.provider.getLogs({
-      address: params.address,
-      fromBlock: start,
-      toBlock: end,
-      topics: params.topics,
-    });
-    out.push(...part);
-    start = end + 1;
+    let stepped = false;
+    for (const chunkSize of trySizes) {
+      const end = Math.min(start + chunkSize - 1, params.toBlock);
+      try {
+        const part = await params.provider.getLogs({
+          address: params.address,
+          fromBlock: start,
+          toBlock: end,
+          topics: params.topics,
+        });
+        out.push(...part);
+        start = end + 1;
+        stepped = true;
+        break;
+      } catch {
+        /* try smaller span */
+      }
+    }
+    if (!stepped) {
+      const end = Math.min(start + 500 - 1, params.toBlock);
+      const part = await ethGetLogsRange(params.provider, params.address, params.topics, start, end);
+      out.push(...part);
+      start = end + 1;
+    }
   }
   return out;
 }
