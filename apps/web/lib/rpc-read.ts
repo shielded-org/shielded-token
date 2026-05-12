@@ -1,5 +1,6 @@
 import {ethers} from "ethers";
 import {CHAIN_ID_BASE_SEPOLIA, type ShieldedNetwork} from "./networks";
+import {ERC20_ABI} from "./shielded-config";
 
 function dedupeUrls(urls: string[]): string[] {
   const seen = new Set<string>();
@@ -65,11 +66,33 @@ export async function getWorkingReadProvider(net: ShieldedNetwork): Promise<ethe
       return provider;
     } catch (e) {
       last = e;
-      if (!isTransientRpcError(e)) break;
+      // Try every candidate: first URL may be misconfigured or return a non-retryable
+      // JSON-RPC error while a later public endpoint still works (matches extension intent).
     }
   }
   if (last instanceof Error) throw last;
   throw new Error(last ? String(last) : "No RPC URL available for this network.");
+}
+
+/**
+ * Read ERC-20 `balanceOf` on the shielded pool network: `getWorkingReadProvider(net)` then
+ * `new Contract(..., ERC20_ABI, provider).balanceOf(holder)` with balance failures treated as `0n`
+ * (same pattern as `refreshPublicLedger` in `apps/wallet-extension/src/App.tsx`).
+ */
+export async function fetchShieldedNetworkErc20BalanceRaw(
+  net: ShieldedNetwork,
+  holder: `0x${string}`,
+  tokenAddress: `0x${string}`
+): Promise<bigint> {
+  const holderAddr = ethers.getAddress(holder);
+  const tokenAddr = ethers.getAddress(tokenAddress);
+  const provider = await getWorkingReadProvider(net);
+  const token = new ethers.Contract(tokenAddr, ERC20_ABI, provider);
+  try {
+    return await token.balanceOf(holderAddr);
+  } catch {
+    return 0n;
+  }
 }
 
 /** Human text for failed wallet sends and common RPC failures. */
