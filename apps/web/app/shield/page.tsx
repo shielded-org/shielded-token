@@ -2,7 +2,7 @@
 
 import {Copy, ShieldCheck} from "lucide-react";
 import {ethers} from "ethers";
-import {useEffect, useState} from "react";
+import {useEffect, useMemo, useState} from "react";
 import {PageShell} from "@/components/layout/page-shell";
 import {AmountInput} from "@/components/ui/amount-input";
 import {ActionOutcomeCard} from "@/components/ui/action-outcome-card";
@@ -10,10 +10,8 @@ import {Button} from "@/components/ui/button";
 import {HashDisplay} from "@/components/ui/hash-display";
 import {PrivacyWarning} from "@/components/ui/privacy-warning";
 import {SelectField} from "@/components/ui/select-field";
-import {TOKENS} from "@/lib/constants";
-import {getShieldedNetwork} from "@/lib/networks";
-import {formatWalletBroadcastError, getWorkingReadProvider} from "@/lib/rpc-read";
-import {ERC20_ABI} from "@/lib/shielded-config";
+import {getShieldedNetwork, tokenOptionsForShieldedPool} from "@/lib/networks";
+import {formatWalletBroadcastError, fetchShieldedNetworkErc20BalanceRaw} from "@/lib/rpc-read";
 import {shieldDeposit} from "@/lib/shielded-integration";
 import {getBrowserSigner} from "@/lib/web3";
 import {copyText, formatAmount, getAmountValidationMessage, nowIso} from "@/lib/utils";
@@ -36,9 +34,12 @@ export default function ShieldPage() {
   const shieldedRpcChainId = useShieldedStore((state) => state.shieldedRpcChainId);
   const ownerPk = useShieldedStore((state) => state.ownerPk);
   const viewingPub = useShieldedStore((state) => state.viewingPub);
-  const tokenOptions = availableTokens.length > 0 ? availableTokens : TOKENS;
+  const tokenOptions = useMemo(
+    () => tokenOptionsForShieldedPool(shieldedRpcChainId, availableTokens),
+    [shieldedRpcChainId, availableTokens]
+  );
 
-  const [token, setToken] = useState(tokenOptions[0].symbol);
+  const [token, setToken] = useState(() => tokenOptions[0]?.symbol ?? "MOCK");
   const [amount, setAmount] = useState("100.000000");
   const [submitting, setSubmitting] = useState(false);
   const [successNote, setSuccessNote] = useState<`0x${string}` | null>(null);
@@ -50,6 +51,16 @@ export default function ShieldPage() {
   const amountError = getAmountValidationMessage(amount, Number.MAX_SAFE_INTEGER, 6);
 
   const tokenMeta = tokenOptions.find((t) => t.symbol === token) ?? tokenOptions[0];
+
+  const tokenListKey = useMemo(
+    () => tokenOptions.map((t) => `${t.symbol}:${t.contractAddress.toLowerCase()}`).join("|"),
+    [tokenOptions]
+  );
+
+  useEffect(() => {
+    if (!tokenOptions.length) return;
+    setToken((prev) => (tokenOptions.some((t) => t.symbol === prev) ? prev : tokenOptions[0]!.symbol));
+  }, [shieldedRpcChainId, tokenListKey]);
 
   useEffect(() => {
     if (!address) {
@@ -67,10 +78,11 @@ export default function ShieldPage() {
     }
     void (async () => {
       try {
-        const provider = await getWorkingReadProvider(net);
-        if (cancelled) return;
-        const erc20 = new ethers.Contract(tokenMeta.contractAddress, ERC20_ABI, provider);
-        const raw = await erc20.balanceOf(address);
+        const raw = await fetchShieldedNetworkErc20BalanceRaw(
+          net,
+          address as `0x${string}`,
+          tokenMeta.contractAddress
+        );
         if (cancelled) return;
         const formatted = ethers.formatUnits(raw, tokenMeta.decimals);
         setPublicBalanceLabel(formatReadableBalance(formatted));
@@ -83,7 +95,7 @@ export default function ShieldPage() {
     return () => {
       cancelled = true;
     };
-  }, [address, shieldedRpcChainId, tokenMeta.contractAddress, tokenMeta.decimals, balanceTick]);
+  }, [address, shieldedRpcChainId, token, tokenMeta.contractAddress, tokenMeta.decimals, balanceTick]);
 
   async function handleSubmit() {
     if (!address) {
