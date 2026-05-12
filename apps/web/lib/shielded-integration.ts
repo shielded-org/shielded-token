@@ -87,13 +87,17 @@ export async function resolveNoteStates(notes: DecryptedNote[], spendingKey: big
 
   return Promise.all(
     notes.map(async (note) => {
-      const nullifier = await poseidonHash2(poseidon, spendingKey, BigInt(note.commitment));
-      const isSpent = await pool.nullifierSet(nullifier);
-      return {
-        ...note,
-        nullifier,
-        isSpent: Boolean(isSpent),
-      } satisfies ResolvedNoteState;
+      try {
+        const nullifier = await poseidonHash2(poseidon, spendingKey, BigInt(note.commitment));
+        const isSpent = await pool.nullifierSet(nullifier);
+        return {
+          ...note,
+          nullifier,
+          isSpent: Boolean(isSpent),
+        } satisfies ResolvedNoteState;
+      } catch {
+        return {...note, isSpent: false} satisfies ResolvedNoteState;
+      }
     })
   );
 }
