@@ -2,11 +2,13 @@
 
 import Link from "next/link";
 import {Eye, EyeOff, NotebookTabs, TrendingUp, Wallet2} from "lucide-react";
+import {useMemo} from "react";
 import {PageShell} from "@/components/layout/page-shell";
 import {HashDisplay} from "@/components/ui/hash-display";
 import {MetricCard} from "@/components/ui/metric-card";
 import {StatusBadge} from "@/components/ui/status-badge";
-import {TOKENS} from "@/lib/constants";
+import {tokenOptionsForShieldedPool} from "@/lib/networks";
+import {useHasMounted} from "@/lib/use-has-mounted";
 import {encodeShieldedAddress} from "@/lib/shielded-address";
 import {
   formatAmount,
@@ -19,19 +21,23 @@ import {
 import {useShieldedStore} from "@/store/use-shielded-store";
 
 export default function DashboardPage() {
+  const hasMounted = useHasMounted();
   const walletAddress = useShieldedStore((state) => state.walletAddress);
   const ownerPk = useShieldedStore((state) => state.ownerPk);
   const viewingPub = useShieldedStore((state) => state.viewingPub);
   const notes = useShieldedStore((state) => state.notes);
   const availableTokens = useShieldedStore((state) => state.tokens);
-  const tokenOptions = availableTokens.length > 0 ? availableTokens : TOKENS;
   const revealBalances = useShieldedStore((state) => state.revealBalances);
   const setRevealBalances = useShieldedStore((state) => state.setRevealBalances);
   const transactions = useShieldedStore((state) => state.transactions);
   const shieldedRpcChainId = useShieldedStore((state) => state.shieldedRpcChainId);
-  const isConnected = Boolean(walletAddress);
+  const tokenOptions = useMemo(
+    () => tokenOptionsForShieldedPool(shieldedRpcChainId, availableTokens),
+    [shieldedRpcChainId, availableTokens]
+  );
+  const isConnected = Boolean(hasMounted && walletAddress);
   const shieldedAddress =
-    viewingPub && ownerPk
+    hasMounted && viewingPub && ownerPk
       ? encodeShieldedAddress({
           ownerPk: BigInt(ownerPk),
           viewingPub,
