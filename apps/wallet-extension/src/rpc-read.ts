@@ -71,7 +71,6 @@ export async function getWorkingReadProvider(net: ShieldedNetwork): Promise<ethe
       return provider;
     } catch (e) {
       last = e;
-      if (!isTransientRpcError(e)) break;
     }
   }
   if (last instanceof Error) throw last;
