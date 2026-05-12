@@ -13,7 +13,7 @@ import {InputField} from "@/components/ui/input-field";
 import {PrivacyWarning} from "@/components/ui/privacy-warning";
 import {SegmentedControl} from "@/components/ui/segmented-control";
 import {StatusBadge} from "@/components/ui/status-badge";
-import {TOKENS} from "@/lib/constants";
+import {tokenOptionsForShieldedPool} from "@/lib/networks";
 import {createHex, formatAmount, getAmountValidationMessage, isValidHexAddress, nowIso} from "@/lib/utils";
 import {useShieldedStore} from "@/store/use-shielded-store";
 import type {ProofStep, TransactionStatus} from "@/lib/types";
@@ -33,7 +33,7 @@ export default function UnshieldPage() {
   const walletAddress = useShieldedStore((state) => state.walletAddress);
   const availableTokens = useShieldedStore((state) => state.tokens);
   const shieldedRpcChainId = useShieldedStore((state) => state.shieldedRpcChainId);
-  const tokenOptions = availableTokens.length > 0 ? availableTokens : TOKENS;
+  const tokenOptions = tokenOptionsForShieldedPool(shieldedRpcChainId, availableTokens);
 
   const [recipientMode, setRecipientMode] = useState<RecipientMode>("self");
   const [recipient, setRecipient] = useState("");
