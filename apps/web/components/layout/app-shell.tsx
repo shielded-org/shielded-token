@@ -4,11 +4,17 @@ import Link from "next/link";
 import {usePathname} from "next/navigation";
 import {Building2, House, Menu, Settings, TerminalSquare, X} from "lucide-react";
 import {ethers} from "ethers";
-import {useEffect, useState} from "react";
+import {useEffect, useRef, useState} from "react";
 import {WalletConnection} from "@/components/wallet/wallet-connection";
 import {WalletNetworkSyncBanner} from "@/components/wallet/wallet-network-sync-banner";
 import {NAV_ITEMS, RELAYER_URL} from "@/lib/constants";
-import {deriveShieldedKeysFromWallet, mapNotesToUi, resolveNoteStates, scanPrivateState} from "@/lib/shielded-integration";
+import {
+  deriveShieldedKeysFromWallet,
+  mapNotesToUi,
+  resolveNoteStates,
+  scanPrivateState,
+  type ResolvedNoteState,
+} from "@/lib/shielded-integration";
 import {buildTokenDefinitionsForShieldedNetwork, getShieldedNetwork, getShieldedNetworks, type ShieldedChainId} from "@/lib/networks";
 import {getWorkingReadProvider} from "@/lib/rpc-read";
 import {ERC20_ABI} from "@/lib/shielded-config";
@@ -34,6 +40,13 @@ export function AppShell({children}: {children: React.ReactNode}) {
   const setTokens = useShieldedStore((state) => state.setTokens);
   const shieldedRpcChainId = useShieldedStore((state) => state.shieldedRpcChainId);
   const setShieldedRpcChainId = useShieldedStore((state) => state.setShieldedRpcChainId);
+
+  /** Last successful chain scan (extension-style): do not restart a long `eth_getLogs` scan when only `tokens` metadata updates. */
+  const lastResolvedScanRef = useRef<{chainId: ShieldedChainId; notes: ResolvedNoteState[]} | null>(null);
+
+  useEffect(() => {
+    lastResolvedScanRef.current = null;
+  }, [shieldedRpcChainId]);
 
   useEffect(() => {
     let mounted = true;
@@ -108,23 +121,47 @@ export function AppShell({children}: {children: React.ReactNode}) {
   useEffect(() => {
     let cancelled = false;
     async function resolveTokenMetadata() {
+      if (!getShieldedNetwork(shieldedRpcChainId)) {
+        setShieldedRpcChainId(shieldedRpcChainId);
+        return;
+      }
+      const net = getShieldedNetwork(shieldedRpcChainId)!;
+      const defs = buildTokenDefinitionsForShieldedNetwork(net);
+      setTokens(defs);
       try {
-        const net = getShieldedNetwork(shieldedRpcChainId);
-        if (!net) return;
         const provider = await getWorkingReadProvider(net);
-        const defs = buildTokenDefinitionsForShieldedNetwork(net);
         const unique = Array.from(new Set(defs.map((t) => t.contractAddress.toLowerCase())));
         const resolved = await Promise.all(
-          unique.map(async (addr, index) => {
-            const token = new ethers.Contract(addr, ERC20_ABI, provider);
-            const [symbol, decimals] = await Promise.all([token.symbol(), token.decimals()]);
+          unique.map(async (addrLower) => {
+            const def = defs.find((d) => d.contractAddress.toLowerCase() === addrLower);
+            const addr = ethers.getAddress(addrLower) as `0x${string}`;
+            let symbol = def?.symbol ?? "TOKEN";
+            let decimals = def?.decimals ?? 18;
+            try {
+              const token = new ethers.Contract(addr, ERC20_ABI, provider);
+              try {
+                const s = await token.symbol();
+                if (s != null && String(s).trim() !== "") symbol = String(s);
+              } catch {
+                /* IERC20Metadata missing or empty decode (BAD_DATA) */
+              }
+              try {
+                const d = await token.decimals();
+                const n = Number(d);
+                if (Number.isFinite(n) && n >= 0 && n <= 36) decimals = n;
+              } catch {
+                /* keep def */
+              }
+            } catch {
+              /* keep def */
+            }
             return {
-              symbol: String(symbol),
-              name: String(symbol),
-              decimals: Number(decimals),
-              accent: defs[index % defs.length]?.accent ?? defs[0].accent,
-              icon: String(symbol).slice(0, 1).toUpperCase(),
-              contractAddress: ethers.getAddress(addr) as `0x${string}`,
+              symbol,
+              name: symbol,
+              decimals,
+              accent: def?.accent ?? defs[0]?.accent ?? "",
+              icon: symbol.slice(0, 1).toUpperCase(),
+              contractAddress: addr,
             };
           })
         );
@@ -132,26 +169,32 @@ export function AppShell({children}: {children: React.ReactNode}) {
           setTokens(resolved);
         }
       } catch {
-        // fallback to default tokens
+        /* defs already applied */
       }
     }
     void resolveTokenMetadata();
     return () => {
       cancelled = true;
     };
-  }, [setTokens, shieldedRpcChainId]);
+  }, [setShieldedRpcChainId, setTokens, shieldedRpcChainId]);
 
   useEffect(() => {
     if (!viewingPub || !viewingKey || !spendingKey) return;
     const activeViewingPub = viewingPub;
+    const activeChainId = shieldedRpcChainId;
     let cancelled = false;
     async function syncNotes() {
       try {
-        const scan = await scanPrivateState(BigInt(viewingKey), activeViewingPub, shieldedRpcChainId);
-        const resolvedNotes = await resolveNoteStates(scan.notes, BigInt(spendingKey), shieldedRpcChainId);
+        if (!getShieldedNetwork(activeChainId)) {
+          setShieldedRpcChainId(activeChainId);
+          return;
+        }
+        const scan = await scanPrivateState(BigInt(viewingKey), activeViewingPub, activeChainId);
+        const resolvedNotes = await resolveNoteStates(scan.notes, BigInt(spendingKey), activeChainId);
         if (cancelled) return;
         setLastSyncedBlock(scan.stats.latestBlock);
-        setNotes(mapNotesToUi(resolvedNotes, tokens));
+        lastResolvedScanRef.current = {chainId: activeChainId, notes: resolvedNotes};
+        setNotes(mapNotesToUi(resolvedNotes, useShieldedStore.getState().tokens));
       } catch {
         // keep previous state
       }
@@ -164,7 +207,14 @@ export function AppShell({children}: {children: React.ReactNode}) {
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [setLastSyncedBlock, setNotes, shieldedRpcChainId, spendingKey, tokens, viewingKey, viewingPub]);
+  }, [setLastSyncedBlock, setNotes, setShieldedRpcChainId, shieldedRpcChainId, spendingKey, viewingKey, viewingPub]);
+
+  /** Re-apply token decimals/symbols to the last scan when RPC metadata resolves (avoids cancelling an in-flight Base scan). */
+  useEffect(() => {
+    const cached = lastResolvedScanRef.current;
+    if (!cached?.notes.length || cached.chainId !== shieldedRpcChainId) return;
+    setNotes(mapNotesToUi(cached.notes, tokens));
+  }, [tokens, shieldedRpcChainId, setNotes]);
 
   const shieldedNetworks = getShieldedNetworks();
 
