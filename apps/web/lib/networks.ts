@@ -223,3 +223,29 @@ export function buildTokenDefinitionsForShieldedNetwork(net: ShieldedNetwork): T
     contractAddress: t.address,
   }));
 }
+
+/**
+ * Pool token pickers and balance reads must use contract addresses from `getShieldedNetwork`,
+ * never raw `storeTokens` alone (stale or cross-chain rows would call the wrong `balanceOf`).
+ * Optional store entries overlay symbol/name/decimals when `contractAddress` matches.
+ */
+export function tokenOptionsForShieldedPool(
+  shieldedRpcChainId: ShieldedChainId,
+  storeTokens: TokenDefinition[]
+): TokenDefinition[] {
+  const net = getShieldedNetwork(shieldedRpcChainId) ?? getShieldedNetwork(CHAIN_ID_ETH_SEPOLIA)!;
+  const fromConfig = buildTokenDefinitionsForShieldedNetwork(net);
+  if (storeTokens.length === 0) return fromConfig;
+  const byAddr = new Map(storeTokens.map((t) => [t.contractAddress.toLowerCase(), t]));
+  return fromConfig.map((t) => {
+    const s = byAddr.get(t.contractAddress.toLowerCase());
+    if (!s) return t;
+    return {
+      ...t,
+      symbol: s.symbol,
+      name: s.name,
+      decimals: s.decimals,
+      icon: s.icon,
+    };
+  });
+}
