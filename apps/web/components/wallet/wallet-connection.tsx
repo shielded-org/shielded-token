@@ -6,11 +6,13 @@ import {useEffect, useMemo, useState} from "react";
 import {Button} from "@/components/ui/button";
 import {getActiveInjectedProvider, listInjectedProviders, setActiveInjectedProvider} from "@/lib/injected-wallet";
 import {getShieldedNetwork} from "@/lib/networks";
+import {useHasMounted} from "@/lib/use-has-mounted";
 import {shortenHash} from "@/lib/utils";
 import {baseSepolia, mainnet, sepolia} from "wagmi/chains";
 import {useShieldedStore} from "@/store/use-shielded-store";
 
 export function WalletConnection() {
+  const hasMounted = useHasMounted();
   const address = useShieldedStore((state) => state.walletAddress);
   const chainId = useShieldedStore((state) => state.chainId);
   const setWalletConnection = useShieldedStore((state) => state.setWalletConnection);
@@ -19,7 +21,7 @@ export function WalletConnection() {
   const [showWalletDialog, setShowWalletDialog] = useState(false);
   const [pendingConnectorId, setPendingConnectorId] = useState<string | null>(null);
   const [nativeBalance, setNativeBalance] = useState<string | null>(null);
-  const isConnected = Boolean(address);
+  const isConnected = Boolean(hasMounted && address);
   const chainName =
     chainId === mainnet.id
       ? "Mainnet"
@@ -32,9 +34,10 @@ export function WalletConnection() {
   const poolNet = getShieldedNetwork(shieldedRpcChainId);
   const walletMatchesPool = chainId != null && chainId === shieldedRpcChainId;
   const availableConnectors = useMemo(() => {
+    if (!hasMounted) return [];
     return listInjectedProviders().map((item) => ({id: item.name.toLowerCase(), name: item.name, provider: item.provider}));
-  }, []);
-  const connectorUnavailable = availableConnectors.length === 0;
+  }, [hasMounted]);
+  const connectorUnavailable = !hasMounted || availableConnectors.length === 0;
   const isPending = pendingConnectorId !== null;
 
   useEffect(() => {
