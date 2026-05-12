@@ -3,8 +3,21 @@
 import {create} from "zustand";
 import {createJSONStorage, persist} from "zustand/middleware";
 import {TOKENS} from "@/lib/constants";
-import {defaultShieldedChainId, normalizeStoredShieldedChainId, type ShieldedChainId} from "@/lib/networks";
+import {
+  buildTokenDefinitionsForShieldedNetwork,
+  CHAIN_ID_ETH_SEPOLIA,
+  defaultShieldedChainId,
+  getShieldedNetwork,
+  normalizeStoredShieldedChainId,
+  type ShieldedChainId,
+} from "@/lib/networks";
 import type {AppMode, Note, RelayerHealth, TokenDefinition, TransactionRecord, TransactionStatus} from "@/lib/types";
+
+/** Always match pool token addresses to the active shielded chain (never persist cross-chain addresses). */
+function tokensForShieldedChain(chainId: ShieldedChainId): TokenDefinition[] {
+  const net = getShieldedNetwork(chainId) ?? getShieldedNetwork(CHAIN_ID_ETH_SEPOLIA);
+  return net ? buildTokenDefinitionsForShieldedNetwork(net) : TOKENS;
+}
 
 type ShieldedState = {
   spendingKey: string;
@@ -57,7 +70,7 @@ export const useShieldedStore = create<ShieldedState>()(
       walletAddress: null,
       chainId: null,
       shieldedRpcChainId: defaultShieldedChainId(),
-      tokens: TOKENS,
+      tokens: tokensForShieldedChain(defaultShieldedChainId()),
       notes: [],
       nullifiers: [],
       mode: "pool",
@@ -73,7 +86,23 @@ export const useShieldedStore = create<ShieldedState>()(
       setRevealBalances: (revealBalances) => set({revealBalances}),
       setTokens: (tokens) => set({tokens}),
       setWalletConnection: (walletAddress, chainId) => set({walletAddress, chainId}),
-      setShieldedRpcChainId: (shieldedRpcChainId) => set({shieldedRpcChainId: normalizeStoredShieldedChainId(shieldedRpcChainId)}),
+      setShieldedRpcChainId: (shieldedRpcChainId) =>
+        set((state) => {
+          const next = normalizeStoredShieldedChainId(shieldedRpcChainId);
+          const same = state.shieldedRpcChainId === next;
+          return {
+            shieldedRpcChainId: next,
+            tokens: tokensForShieldedChain(next),
+            ...(same
+              ? {}
+              : {
+                  notes: [],
+                  lastSyncedBlock: getShieldedNetwork(next)?.poolDeployBlock ?? 0,
+                  transactions: [],
+                  nullifiers: [],
+                }),
+          };
+        }),
       setKeyMaterial: (keys) =>
         set({
           spendingKey: keys.spendingKey,
@@ -140,6 +169,14 @@ export const useShieldedStore = create<ShieldedState>()(
     {
       name: "shielded-token-store",
       storage: createJSONStorage(() => localStorage),
+      merge: (persisted, current) => {
+        const p = persisted as Partial<ShieldedState>;
+        const merged = {...current, ...p};
+        const nextChain = normalizeStoredShieldedChainId(p.shieldedRpcChainId ?? merged.shieldedRpcChainId);
+        merged.shieldedRpcChainId = nextChain;
+        merged.tokens = tokensForShieldedChain(nextChain);
+        return merged;
+      },
       partialize: (state) => ({
         spendingKey: state.spendingKey,
         viewingKey: state.viewingKey,
@@ -149,7 +186,6 @@ export const useShieldedStore = create<ShieldedState>()(
         walletAddress: state.walletAddress,
         chainId: state.chainId,
         shieldedRpcChainId: normalizeStoredShieldedChainId(state.shieldedRpcChainId),
-        tokens: state.tokens,
         notes: state.notes,
         nullifiers: state.nullifiers,
         mode: state.mode,
