@@ -2,7 +2,7 @@
 
 import {ArrowRightLeft} from "lucide-react";
 import {ethers} from "ethers";
-import {useMemo, useState} from "react";
+import {useEffect, useMemo, useState} from "react";
 import {NoteCard} from "@/components/notes/note-card";
 import {PageShell} from "@/components/layout/page-shell";
 import {ProofLoader} from "@/components/proof/proof-loader";
@@ -12,7 +12,7 @@ import {Button} from "@/components/ui/button";
 import {InputField} from "@/components/ui/input-field";
 import {SelectField} from "@/components/ui/select-field";
 import {decodeShieldedAddress} from "@/lib/shielded-address";
-import {TOKENS} from "@/lib/constants";
+import {tokenOptionsForShieldedPool} from "@/lib/networks";
 import {createHex, formatAmount, getAmountValidationMessage, isValidViewingKey, nowIso} from "@/lib/utils";
 import {useShieldedStore} from "@/store/use-shielded-store";
 import type {ProofStep, TransactionStatus} from "@/lib/types";
@@ -29,10 +29,13 @@ export default function TransferPage() {
   const viewingPub = useShieldedStore((state) => state.viewingPub);
   const availableTokens = useShieldedStore((state) => state.tokens);
   const shieldedRpcChainId = useShieldedStore((state) => state.shieldedRpcChainId);
-  const tokenOptions = availableTokens.length > 0 ? availableTokens : TOKENS;
+  const tokenOptions = useMemo(
+    () => tokenOptionsForShieldedPool(shieldedRpcChainId, availableTokens),
+    [shieldedRpcChainId, availableTokens]
+  );
 
   const [recipient, setRecipient] = useState("");
-  const [token, setToken] = useState(tokenOptions[0].symbol);
+  const [token, setToken] = useState(() => tokenOptions[0]?.symbol ?? "MOCK");
   const [amount, setAmount] = useState("90");
   const [selectedNoteId, setSelectedNoteId] = useState<string | null>(null);
   const [proofStep, setProofStep] = useState<ProofStep>("witness");
@@ -41,6 +44,16 @@ export default function TransferPage() {
   const [relayerStatus, setRelayerStatus] = useState<TransactionStatus>("pending");
   const [requestId, setRequestId] = useState<string | null>(null);
   const [confirmedHash, setConfirmedHash] = useState<`0x${string}` | null>(null);
+
+  const tokenListKey = useMemo(
+    () => tokenOptions.map((t) => `${t.symbol}:${t.contractAddress.toLowerCase()}`).join("|"),
+    [tokenOptions]
+  );
+
+  useEffect(() => {
+    if (!tokenOptions.length) return;
+    setToken((prev) => (tokenOptions.some((t) => t.symbol === prev) ? prev : tokenOptions[0]!.symbol));
+  }, [shieldedRpcChainId, tokenListKey]);
 
   const tokenMeta = useMemo(
     () => tokenOptions.find((t) => t.symbol === token) ?? tokenOptions[0],
