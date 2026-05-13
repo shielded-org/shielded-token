@@ -56,10 +56,10 @@ export const CONTRACTS = {
 } as const;
 
 export const PROOF_STEP_LABELS = {
-  witness: "Generating witness...",
-  proof: "Building proof...",
-  submit: "Submitting to relayer...",
-  confirm: "Waiting for confirmation...",
+  witness: "Syncing chain & Merkle data",
+  proof: "Generating proof in-browser",
+  submit: "Sending to relayer",
+  confirm: "Transaction submitted",
 } as const;
 
 export const NAV_ITEMS = [

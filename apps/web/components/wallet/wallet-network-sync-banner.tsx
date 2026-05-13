@@ -5,9 +5,11 @@ import {useState} from "react";
 import {Button} from "@/components/ui/button";
 import {getShieldedNetwork} from "@/lib/networks";
 import {readInjectedChainId, switchInjectedWalletToShieldedChain} from "@/lib/wallet-switch-chain";
+import {useHasMounted} from "@/lib/use-has-mounted";
 import {useShieldedStore} from "@/store/use-shielded-store";
 
 export function WalletNetworkSyncBanner() {
+  const hasMounted = useHasMounted();
   const address = useShieldedStore((s) => s.walletAddress);
   const walletChainId = useShieldedStore((s) => s.chainId);
   const shieldedRpcChainId = useShieldedStore((s) => s.shieldedRpcChainId);
@@ -16,12 +18,13 @@ export function WalletNetworkSyncBanner() {
   const [error, setError] = useState<string | null>(null);
 
   const targetNet = getShieldedNetwork(shieldedRpcChainId);
+  const effectiveAddress = hasMounted ? address : null;
   const mismatch =
-    Boolean(address) &&
+    Boolean(effectiveAddress) &&
     Boolean(targetNet) &&
     (walletChainId === null || walletChainId !== shieldedRpcChainId);
 
-  if (!mismatch || !targetNet || !address) {
+  if (!mismatch || !targetNet || !effectiveAddress) {
     return null;
   }
 
@@ -32,7 +35,7 @@ export function WalletNetworkSyncBanner() {
       await switchInjectedWalletToShieldedChain(shieldedRpcChainId);
       const next = await readInjectedChainId();
       if (next != null) {
-        setWalletConnection(address, next);
+        setWalletConnection(effectiveAddress, next);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

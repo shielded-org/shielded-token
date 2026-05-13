@@ -8,7 +8,8 @@
  *   TESTNET_RPC_URL, TESTNET_CHAIN_ID, PRIVATE_KEY (same as deploy scripts)
  *   POOL_DEPLOYMENT_JSON — optional override (default: sepolia vs base from TESTNET_CHAIN_ID)
  *   MOCK_TOKENS_JSON — optional override (default: scripts/sepolia-mock-erc20-deployment.json on 11155111,
- *                      scripts/base-sepolia-mock-erc20-deployment.json on 84532)
+ *                      scripts/base-sepolia-mock-erc20-deployment.json on 84532,
+ *                      scripts/arbitrum-sepolia-mock-erc20-deployment.json on 421614)
  */
 import {readFileSync} from "node:fs";
 import path from "node:path";
@@ -22,13 +23,21 @@ const RPC = process.env.TESTNET_RPC_URL || process.env.RPC_URL || "";
 const CHAIN_ID = Number(process.env.TESTNET_CHAIN_ID || 0);
 const pk = (process.env.PRIVATE_KEY || "").trim();
 const defaultPoolJson =
-  CHAIN_ID === 84532 ? "base-sepolia-pool-deployment.json" : CHAIN_ID === 11155111 ? "sepolia-pool-deployment.json" : null;
+  CHAIN_ID === 84532
+    ? "base-sepolia-pool-deployment.json"
+    : CHAIN_ID === 421614
+      ? "arbitrum-sepolia-pool-deployment.json"
+      : CHAIN_ID === 11155111
+        ? "sepolia-pool-deployment.json"
+        : null;
 const defaultMockJson =
   CHAIN_ID === 84532
     ? "base-sepolia-mock-erc20-deployment.json"
-    : CHAIN_ID === 11155111
-      ? "sepolia-mock-erc20-deployment.json"
-      : null;
+    : CHAIN_ID === 421614
+      ? "arbitrum-sepolia-mock-erc20-deployment.json"
+      : CHAIN_ID === 11155111
+        ? "sepolia-mock-erc20-deployment.json"
+        : null;
 const poolJsonPath =
   process.env.POOL_DEPLOYMENT_JSON ||
   (defaultPoolJson ? path.join(__dirname, defaultPoolJson) : path.join(__dirname, "base-sepolia-pool-deployment.json"));
@@ -41,7 +50,9 @@ const POOL_ABI = ["function setTokenEnabled(address token, bool enabled) externa
 async function main() {
   if (!RPC) throw new Error("Set TESTNET_RPC_URL");
   if (!CHAIN_ID) {
-    throw new Error("Set TESTNET_CHAIN_ID (11155111 = Ethereum Sepolia, 84532 = Base Sepolia)");
+    throw new Error(
+      "Set TESTNET_CHAIN_ID (11155111 = Ethereum Sepolia, 84532 = Base Sepolia, 421614 = Arbitrum Sepolia)"
+    );
   }
   if (!pk) throw new Error("Set PRIVATE_KEY");
   const walletPk = pk.startsWith("0x") ? pk : `0x${pk}`;

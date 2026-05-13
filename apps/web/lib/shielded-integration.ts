@@ -1,12 +1,22 @@
 "use client";
 
 import {ethers} from "ethers";
-import {CHAIN_ID_ETH_SEPOLIA, getShieldedNetwork, type ShieldedChainId} from "./networks";
-import {getWorkingReadProvider} from "./rpc-read";
+import {
+  CHAIN_ID_ARBITRUM_SEPOLIA,
+  CHAIN_ID_BASE_SEPOLIA,
+  CHAIN_ID_ETH_SEPOLIA,
+  getShieldedNetwork,
+  type ShieldedChainId,
+  type ShieldedNetwork,
+} from "./networks";
+import {runAlchemyJsonRpcSerialized} from "./premium-rpc-queue";
+import {getReadRpcUrlCandidates, getWorkingReadProvider} from "./rpc-read";
 import {ERC20_ABI, POOL_ABI, POSEIDON_ABI} from "./shielded-config";
-import {deriveOwnerPk, deriveUserKeys, keySeedFromWalletSignature, viewingPrivToPub} from "./keys";
+import {deriveOwnerPk, deriveUserKeys, keySeedFromWalletSignature, viewingPrivToPub, SHIELD_KEY_DERIVATION_CONSENT_MESSAGE} from "./keys";
 import {scanShieldedNotes, type DecryptedNote} from "./shielded";
-import type {TokenDefinition} from "./types";
+import {shieldedScanDebug, shieldedScanDebugEnabled, shieldedScanRpcLabel} from "./shielded-scan-debug";
+import type {StoredDecryptedNote, TokenDefinition} from "./types";
+import {tokenAddressFromNoteTokenField} from "./utils";
 
 function toHex32(v: bigint): `0x${string}` {
   return ethers.zeroPadValue(ethers.toBeHex(v), 32) as `0x${string}`;
@@ -28,13 +38,232 @@ function requireNet(chainId: ShieldedChainId) {
   return net;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** One `eth_getLogs` pass per **pool chain** at a time; different networks do not block each other. */
+const scanPrivateStateQueueByChain = new Map<ShieldedChainId, Promise<unknown>>();
+
+function runScanPrivateStateSerializedForChain<T>(shieldedChainId: ShieldedChainId, task: () => Promise<T>): Promise<T> {
+  const prev = scanPrivateStateQueueByChain.get(shieldedChainId) ?? Promise.resolve();
+  const p = prev.then(task, task);
+  scanPrivateStateQueueByChain.set(
+    shieldedChainId,
+    p.then(
+      () => undefined,
+      () => undefined
+    )
+  );
+  return p;
+}
+
+function mergeDecryptedNotesDedupe(carry: DecryptedNote[], fresh: DecryptedNote[]): DecryptedNote[] {
+  const m = new Map<string, DecryptedNote>();
+  for (const n of carry) m.set(`${n.commitment}:${n.txHash}`, n);
+  for (const n of fresh) m.set(`${n.commitment}:${n.txHash}`, n);
+  return Array.from(m.values());
+}
+
+/** Smaller first window — matches wallet-extension chunk intent on L2 public RPCs that cap log ranges. */
+function defaultLogChunkSize(net: ShieldedNetwork): number | undefined {
+  if (net.id === CHAIN_ID_BASE_SEPOLIA || net.id === CHAIN_ID_ARBITRUM_SEPOLIA) return 2000;
+  return undefined;
+}
+
+/**
+ * Run `eth_getLogs` note scan across read RPC candidates.
+ * On Base / Arbitrum Sepolia, **merge** results from every URL: some public L2 endpoints return 200 + empty
+ * or partial logs. Ethereum Sepolia keeps the faster "first successful scan" behavior.
+ *
+ * **Extension parity:** `apps/wallet-extension` scans with a **single** wallet `JsonRpcProvider` (one pass).
+ * The web app merges several mirrors; without care that repeats full `eth_getLogs` history per URL and
+ * overlaps Alchemy across chains → 429. We reorder premium RPCs last, serialize Alchemy, throttle, and
+ * short-circuit when a mirror already returned all logs decrypted.
+ */
+export async function scanShieldedNotesWithRpcFallback(
+  net: ShieldedNetwork,
+  scanArgs: {
+    poolAddress: `0x${string}`;
+    fromBlock: number;
+    viewingPriv: bigint;
+    viewingPub: `0x${string}`;
+  }
+) {
+  const urls = getReadRpcUrlCandidates(net);
+  const logChunkSize = defaultLogChunkSize(net);
+  const mergeMultiRpc = net.id === CHAIN_ID_BASE_SEPOLIA || net.id === CHAIN_ID_ARBITRUM_SEPOLIA;
+
+  if (shieldedScanDebugEnabled()) {
+    shieldedScanDebug("scanShieldedNotesWithRpcFallback:start", {
+      shieldedChainId: net.id,
+      netLabel: net.label,
+      pool: scanArgs.poolAddress,
+      fromBlock: scanArgs.fromBlock,
+      viewingPubPrefix: `${scanArgs.viewingPub.slice(0, 12)}…`,
+      mergeMultiRpc,
+      rpcCandidatesOrdered: urls.map(shieldedScanRpcLabel),
+      logChunkSize: logChunkSize ?? null,
+    });
+  }
+
+  if (!mergeMultiRpc) {
+    let lastErr: unknown;
+    for (const url of urls) {
+      try {
+        return await runAlchemyJsonRpcSerialized(url, async () => {
+          const provider = new ethers.JsonRpcProvider(url, net.id);
+          await provider.getBlockNumber();
+          return scanShieldedNotes({
+            provider,
+            ...scanArgs,
+            logChunkSize,
+            debugRpcLabel: shieldedScanRpcLabel(url),
+          });
+        });
+      } catch (e) {
+        lastErr = e;
+        if (shieldedScanDebugEnabled()) {
+          shieldedScanDebug("scanShieldedNotesWithRpcFallback:ethRpcError", {
+            shieldedChainId: net.id,
+            netLabel: net.label,
+            url: shieldedScanRpcLabel(url),
+            message: e instanceof Error ? e.message : String(e),
+          });
+        }
+      }
+    }
+    if (lastErr instanceof Error) throw lastErr;
+    throw new Error(lastErr ? String(lastErr) : "No RPC could complete shielded note scan (eth_getLogs).");
+  }
+
+  let lastErr: unknown;
+  const merged = new Map<string, DecryptedNote>();
+  let minLatestBlock = Number.POSITIVE_INFINITY;
+  let maxTotalLogs = 0;
+  let channel: `0x${string}` = ethers.ZeroHash as `0x${string}`;
+  for (let i = 0; i < urls.length; i++) {
+    const url = urls[i]!;
+    if (i > 0) await sleep(90);
+    try {
+      const res = await runAlchemyJsonRpcSerialized(url, async () => {
+        const provider = new ethers.JsonRpcProvider(url, net.id);
+        await provider.getBlockNumber();
+        return scanShieldedNotes({
+          provider,
+          ...scanArgs,
+          logChunkSize,
+          debugRpcLabel: shieldedScanRpcLabel(url),
+        });
+      });
+      minLatestBlock = Math.min(minLatestBlock, res.stats.latestBlock);
+      maxTotalLogs = Math.max(maxTotalLogs, res.stats.totalLogs);
+      channel = res.stats.channel;
+      for (const n of res.notes) {
+        merged.set(`${n.commitment}:${n.txHash}`, n);
+      }
+      const fullDecrypt =
+        res.stats.totalLogs > 0 && res.stats.decryptSuccess === res.stats.totalLogs;
+      if (fullDecrypt) {
+        if (shieldedScanDebugEnabled()) {
+          shieldedScanDebug("scanShieldedNotesWithRpcFallback:shortCircuit", {
+            shieldedChainId: net.id,
+            netLabel: net.label,
+            rpc: shieldedScanRpcLabel(url),
+            rpcIndex: i,
+            totalLogs: res.stats.totalLogs,
+            reason: "All logs decrypted on this mirror; skipping remaining RPCs to save quota.",
+          });
+        }
+        break;
+      }
+    } catch (e) {
+      lastErr = e;
+      if (shieldedScanDebugEnabled()) {
+        shieldedScanDebug("scanShieldedNotesWithRpcFallback:l2RpcError", {
+          shieldedChainId: net.id,
+          netLabel: net.label,
+          pool: scanArgs.poolAddress,
+          rpcIndex: i,
+          url: shieldedScanRpcLabel(url),
+          message: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+  }
+  if (!Number.isFinite(minLatestBlock)) {
+    if (lastErr instanceof Error) throw lastErr;
+    throw new Error(lastErr ? String(lastErr) : "No RPC could complete shielded note scan (eth_getLogs).");
+  }
+  const notes = Array.from(merged.values());
+  if (shieldedScanDebugEnabled()) {
+    shieldedScanDebug("scanShieldedNotesWithRpcFallback:merged", {
+      shieldedChainId: net.id,
+      mergedNoteCount: notes.length,
+      minLatestBlock,
+      maxTotalLogs,
+      channel,
+    });
+  }
+  return {
+    notes,
+    stats: {
+      channel,
+      latestBlock: minLatestBlock,
+      totalLogs: maxTotalLogs,
+      decryptSuccess: notes.length,
+    },
+  };
+}
+
+export type ShieldedScanCachePayload = {
+  viewingPub: `0x${string}`;
+  lastScannedBlock: number;
+  notes: DecryptedNote[];
+};
+
+export type ScanPrivateStateResult = {
+  notes: DecryptedNote[];
+  stats: Awaited<ReturnType<typeof scanShieldedNotes>>["stats"];
+  cacheOut: ShieldedScanCachePayload;
+};
+
+export function storedDecryptedNotesToLive(rows: StoredDecryptedNote[]): DecryptedNote[] {
+  return rows.map((r) => ({
+    commitment: r.commitment,
+    amount: BigInt(r.amount),
+    blinding: r.blinding,
+    token: r.token,
+    txHash: r.txHash,
+  }));
+}
+
+export function liveDecryptedNotesToStored(notes: DecryptedNote[]): StoredDecryptedNote[] {
+  return notes.map((n) => ({
+    commitment: n.commitment,
+    amount: n.amount.toString(),
+    blinding: n.blinding,
+    token: n.token,
+    txHash: n.txHash,
+  }));
+}
+
+/** Include `poolDeployBlock` so changing env / redeploy does not reuse a stale cursor. */
+export function shieldedScanCacheKey(chainId: ShieldedChainId, poolAddress: string, poolDeployBlock: number): string {
+  return `${chainId}:${poolAddress.toLowerCase()}:${poolDeployBlock}`;
+}
+
+function viewingPubEq(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
 export async function deriveShieldedKeysFromWallet(
   address: `0x${string}`,
   signMessage: (message: string) => Promise<`0x${string}`>,
   shieldedChainId: ShieldedChainId = CHAIN_ID_ETH_SEPOLIA
 ) {
   const net = requireNet(shieldedChainId);
-  const signature = await signMessage("Shielded key derivation consent (deterministic, no transaction)");
+  const signature = await signMessage(SHIELD_KEY_DERIVATION_CONSENT_MESSAGE);
   const seed = keySeedFromWalletSignature(address, signature);
   const owner = deriveUserKeys(seed, "owner");
   const feeRecipient = deriveUserKeys(seed, "feeRecipient");
@@ -42,11 +271,37 @@ export async function deriveShieldedKeysFromWallet(
   const poseidon = new ethers.Contract(net.contracts.poseidon, POSEIDON_ABI, provider);
   const ownerPk = await deriveOwnerPk(owner.spendingKey, poseidon);
   const feeRecipientPk = await deriveOwnerPk(feeRecipient.spendingKey, poseidon);
+  const viewingPub = viewingPrivToPub(owner.viewingPriv);
+  if (shieldedScanDebugEnabled()) {
+    let recoveryByte: number | null = null;
+    try {
+      const bytes = ethers.getBytes(signature);
+      if (bytes.length >= 65) recoveryByte = bytes[64]!;
+    } catch {
+      recoveryByte = null;
+    }
+    const unusualV = recoveryByte != null && recoveryByte < 27;
+    shieldedScanDebug("deriveShieldedKeysFromWallet", {
+      wallet: ethers.getAddress(address),
+      shieldedChainIdUsedForPoseidonOnly: shieldedChainId,
+      seedIndependentOfChainId: true,
+      consentMessageChars: SHIELD_KEY_DERIVATION_CONSENT_MESSAGE.length,
+      signatureHexChars: signature.length,
+      signatureRecoveryByte: recoveryByte,
+      ...(unusualV
+        ? {
+            recoveryByteNote:
+              "v is 0/1 (non-27/28); seed hashes raw wallet bytes. If another client shows different notes, compare signature encoding.",
+          }
+        : {}),
+      viewingPubPrefix: `${viewingPub.slice(0, 12)}…`,
+    });
+  }
   return {
     ownerPk,
     spendingKey: owner.spendingKey,
     viewingPriv: owner.viewingPriv,
-    viewingPub: viewingPrivToPub(owner.viewingPriv),
+    viewingPub,
     feeRecipientPk,
   };
 }
@@ -55,18 +310,67 @@ export async function scanPrivateState(
   viewingPriv: bigint,
   viewingPub: `0x${string}`,
   shieldedChainId: ShieldedChainId,
-  fromBlock?: number
-) {
+  options?: {
+    /** Rare override — normally use incremental cache from the store */
+    fromBlockOverride?: number;
+    /** Same viewer + merged notes + cursor as wallet-extension scan cache */
+    priorCache?: ShieldedScanCachePayload | null;
+  }
+): Promise<ScanPrivateStateResult> {
+  return runScanPrivateStateSerializedForChain(shieldedChainId, () =>
+    scanPrivateStateImpl(viewingPriv, viewingPub, shieldedChainId, options)
+  );
+}
+
+async function scanPrivateStateImpl(
+  viewingPriv: bigint,
+  viewingPub: `0x${string}`,
+  shieldedChainId: ShieldedChainId,
+  options?: {
+    fromBlockOverride?: number;
+    priorCache?: ShieldedScanCachePayload | null;
+  }
+): Promise<ScanPrivateStateResult> {
   const net = requireNet(shieldedChainId);
-  const provider = await getWorkingReadProvider(net);
-  const start = fromBlock ?? net.poolDeployBlock;
-  return scanShieldedNotes({
-    provider,
+  const poolDeploy = net.poolDeployBlock;
+
+  let fromBlock = options?.fromBlockOverride ?? poolDeploy;
+  let carry: DecryptedNote[] = [];
+
+  if (options?.priorCache && viewingPubEq(options.priorCache.viewingPub, viewingPub)) {
+    fromBlock = Math.max(poolDeploy, options.priorCache.lastScannedBlock + 1);
+    carry = options.priorCache.notes;
+  }
+
+  if (shieldedScanDebugEnabled()) {
+    shieldedScanDebug("scanPrivateState", {
+      shieldedChainId,
+      pool: net.contracts.pool,
+      poolDeployBlock: poolDeploy,
+      scanFromBlock: fromBlock,
+      priorCacheHit: Boolean(options?.priorCache && viewingPubEq(options.priorCache.viewingPub, viewingPub)),
+      carryNotes: carry.length,
+    });
+  }
+
+  const delta = await scanShieldedNotesWithRpcFallback(net, {
     poolAddress: net.contracts.pool,
-    fromBlock: start,
+    fromBlock,
     viewingPriv,
     viewingPub,
   });
+
+  const merged = mergeDecryptedNotesDedupe(carry, delta.notes);
+
+  return {
+    notes: merged,
+    stats: delta.stats,
+    cacheOut: {
+      viewingPub,
+      lastScannedBlock: delta.stats.latestBlock,
+      notes: merged,
+    },
+  };
 }
 
 export type ResolvedNoteState = DecryptedNote & {
@@ -87,13 +391,17 @@ export async function resolveNoteStates(notes: DecryptedNote[], spendingKey: big
 
   return Promise.all(
     notes.map(async (note) => {
-      const nullifier = await poseidonHash2(poseidon, spendingKey, BigInt(note.commitment));
-      const isSpent = await pool.nullifierSet(nullifier);
-      return {
-        ...note,
-        nullifier,
-        isSpent: Boolean(isSpent),
-      } satisfies ResolvedNoteState;
+      try {
+        const nullifier = await poseidonHash2(poseidon, spendingKey, BigInt(note.commitment));
+        const isSpent = await pool.nullifierSet(nullifier);
+        return {
+          ...note,
+          nullifier,
+          isSpent: Boolean(isSpent),
+        } satisfies ResolvedNoteState;
+      } catch {
+        return {...note, isSpent: false} satisfies ResolvedNoteState;
+      }
     })
   );
 }
@@ -124,6 +432,7 @@ export async function shieldDeposit(params: {
     },
     params.viewingPub
   );
+  /** Same channel the indexer uses: `keccak256(viewingPub)` — not chain-specific. */
   const channel = ethers.keccak256(params.viewingPub);
   const subchannel = ethers.solidityPackedKeccak256(["bytes32", "uint64"], [channel, 0n]);
   const approveTx = await token.approve(net.contracts.pool, params.amount);
@@ -168,7 +477,7 @@ function fallbackTokenLabel(tokenField: `0x${string}`) {
   return `TOKEN-${compact}`;
 }
 
-export function mapNotesToUi(notes: ResolvedNoteState[], tokens: TokenDefinition[]) {
+export function mapNotesToUi(notes: ResolvedNoteState[], tokens: TokenDefinition[], poolChainId: ShieldedChainId) {
   const tokenByField = new Map<string, TokenDefinition>();
   for (const token of tokens) {
     tokenByField.set(ethers.zeroPadValue(token.contractAddress, 32).toLowerCase(), token);
@@ -177,11 +486,20 @@ export function mapNotesToUi(notes: ResolvedNoteState[], tokens: TokenDefinition
   return notes.map((n, idx) => {
     const normalizedField = normalizeTokenField(n.token);
     const tokenMeta = normalizedField ? tokenByField.get(normalizedField) : undefined;
+    const tokenContractAddress = tokenAddressFromNoteTokenField(n.token) ?? undefined;
+    const tokenByAddr =
+      tokenContractAddress != null
+        ? tokens.find((t) => t.contractAddress.toLowerCase() === tokenContractAddress.toLowerCase())
+        : undefined;
+    /** Padded-field map first; else match canonical ERC-20 so decimals/symbol stay correct (avoids defaulting to 18 on USDC). */
+    const meta = tokenMeta ?? tokenByAddr;
 
     return {
       id: `${n.commitment}-${idx}`,
-      token: tokenMeta?.symbol ?? fallbackTokenLabel(n.token),
-      amount: ethers.formatUnits(n.amount, tokenMeta?.decimals ?? 18),
+      shieldedChainId: poolChainId,
+      token: meta?.symbol ?? fallbackTokenLabel(n.token),
+      ...(tokenContractAddress ? {tokenContractAddress} : {}),
+      amount: ethers.formatUnits(n.amount, meta?.decimals ?? 18),
       status: n.isSpent ? ("spent" as const) : ("unspent" as const),
       commitment: n.commitment,
       nullifier: n.nullifier,

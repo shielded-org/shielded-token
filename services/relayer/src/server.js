@@ -8,9 +8,11 @@ const host = "0.0.0.0";
 
 const CHAIN_ID_ETH_SEPOLIA = 11155111;
 const CHAIN_ID_BASE_SEPOLIA = 84532;
+const CHAIN_ID_ARBITRUM_SEPOLIA = 421614;
 
 const rpcEthSepolia = process.env.RELAYER_RPC_URL_ETH_SEPOLIA || "";
 const rpcBaseSepolia = process.env.RELAYER_RPC_URL_BASE_SEPOLIA || "";
+const rpcArbitrumSepolia = process.env.RELAYER_RPC_URL_ARBITRUM_SEPOLIA || "";
 /** Primary JSON-RPC (defaults to Ethereum Sepolia chain id unless RELAYER_PRIMARY_CHAIN_ID is set, e.g. 31337 for Anvil). */
 const primaryRpc = process.env.RELAYER_RPC_URL || process.env.LOCAL_RPC_URL || "";
 const primaryChainId = Number(process.env.RELAYER_PRIMARY_CHAIN_ID || CHAIN_ID_ETH_SEPOLIA);
@@ -44,6 +46,7 @@ function initRelayerChain(chainId, rpcUrl) {
 
 initRelayerChain(CHAIN_ID_ETH_SEPOLIA, rpcEthSepolia);
 initRelayerChain(CHAIN_ID_BASE_SEPOLIA, rpcBaseSepolia);
+initRelayerChain(CHAIN_ID_ARBITRUM_SEPOLIA, rpcArbitrumSepolia);
 const resolvedPrimary =
   Number.isFinite(primaryChainId) && primaryChainId > 0 ? primaryChainId : CHAIN_ID_ETH_SEPOLIA;
 initRelayerChain(resolvedPrimary, primaryRpc);
@@ -143,12 +146,20 @@ function parseRelayChainId(body) {
   return n;
 }
 
+/** Which env var to set when this chain has no RPC URL at relayer startup. */
+function rpcEnvVarHint(chainId) {
+  if (chainId === CHAIN_ID_ETH_SEPOLIA) return "RELAYER_RPC_URL_ETH_SEPOLIA (or RELAYER_RPC_URL / LOCAL_RPC_URL)";
+  if (chainId === CHAIN_ID_BASE_SEPOLIA) return "RELAYER_RPC_URL_BASE_SEPOLIA";
+  if (chainId === CHAIN_ID_ARBITRUM_SEPOLIA) return "RELAYER_RPC_URL_ARBITRUM_SEPOLIA";
+  return "the RELAYER_RPC_URL_* matching this chain";
+}
+
 function validatePayload(body) {
   if (!body || typeof body !== "object") return "Missing payload";
   const chainId = parseRelayChainId(body);
   if (Number.isNaN(chainId)) return "Invalid chainId";
   if (canSubmitOnchain && !relayerSignersByChain.has(chainId)) {
-    return `Relayer has no RPC configured for chainId ${chainId}`;
+    return `Relayer has no RPC configured for chainId ${chainId}. Set ${rpcEnvVarHint(chainId)} and restart the relayer.`;
   }
   if (!body.proof || !Array.isArray(body.nullifiers) || !Array.isArray(body.newCommitments)) {
     return "Invalid proof bundle shape";
@@ -191,7 +202,7 @@ function validateUnshieldPayload(body) {
   const chainId = parseRelayChainId(body);
   if (Number.isNaN(chainId)) return "Invalid chainId";
   if (canSubmitOnchain && !relayerSignersByChain.has(chainId)) {
-    return `Relayer has no RPC configured for chainId ${chainId}`;
+    return `Relayer has no RPC configured for chainId ${chainId}. Set ${rpcEnvVarHint(chainId)} and restart the relayer.`;
   }
   if (typeof body.proof !== "string" || !body.proof.startsWith("0x")) return "Invalid proof";
   const target = body.shieldedTarget ?? body.shieldedToken;

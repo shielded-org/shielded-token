@@ -13,15 +13,25 @@ import {InputField} from "@/components/ui/input-field";
 import {PrivacyWarning} from "@/components/ui/privacy-warning";
 import {SegmentedControl} from "@/components/ui/segmented-control";
 import {StatusBadge} from "@/components/ui/status-badge";
-import {TOKENS} from "@/lib/constants";
-import {createHex, formatAmount, getAmountValidationMessage, isValidHexAddress, nowIso} from "@/lib/utils";
+import {usePoolScopedNotes} from "@/hooks/use-pool-scoped-notes";
+import {tokenOptionsForShieldedPool} from "@/lib/networks";
+import {mapRelayStatusMessageToProofStep, suggestedEtaForProofStep} from "@/lib/transfer-progress";
+import {toast} from "@/lib/toast";
+import {
+  createHex,
+  formatAmount,
+  getAmountValidationMessage,
+  isValidHexAddress,
+  noteMatchesTokenOption,
+  nowIso,
+} from "@/lib/utils";
 import {useShieldedStore} from "@/store/use-shielded-store";
 import type {ProofStep, TransactionStatus} from "@/lib/types";
 
 type RecipientMode = "self" | "external";
 
 export default function UnshieldPage() {
-  const notes = useShieldedStore((state) => state.notes);
+  const {notes, shieldedRpcChainId} = usePoolScopedNotes();
   const addNote = useShieldedStore((state) => state.addNote);
   const markNoteSpent = useShieldedStore((state) => state.markNoteSpent);
   const upsertTransaction = useShieldedStore((state) => state.upsertTransaction);
@@ -32,8 +42,7 @@ export default function UnshieldPage() {
   const viewingPub = useShieldedStore((state) => state.viewingPub);
   const walletAddress = useShieldedStore((state) => state.walletAddress);
   const availableTokens = useShieldedStore((state) => state.tokens);
-  const shieldedRpcChainId = useShieldedStore((state) => state.shieldedRpcChainId);
-  const tokenOptions = availableTokens.length > 0 ? availableTokens : TOKENS;
+  const tokenOptions = tokenOptionsForShieldedPool(shieldedRpcChainId, availableTokens);
 
   const [recipientMode, setRecipientMode] = useState<RecipientMode>("self");
   const [recipient, setRecipient] = useState("");
@@ -45,6 +54,8 @@ export default function UnshieldPage() {
   const [status, setStatus] = useState<TransactionStatus>("pending");
   const [requestId, setRequestId] = useState<string | null>(null);
   const [confirmedHash, setConfirmedHash] = useState<`0x${string}` | null>(null);
+  const [unshieldError, setUnshieldError] = useState<string | null>(null);
+  const [livePipelineStatus, setLivePipelineStatus] = useState<string | null>(null);
 
   const unspentNotes = useMemo(
     () => notes.filter((note) => note.status === "unspent"),
@@ -52,10 +63,13 @@ export default function UnshieldPage() {
   );
   const selectedNote = unspentNotes.find((note) => note.id === selectedNoteId) ?? unspentNotes[0];
   const selectedNoteMeta = useMemo(() => {
-    const sym = selectedNote?.token;
-    if (!sym) return tokenOptions[0];
-    return tokenOptions.find((t) => t.symbol === sym) ?? tokenOptions[0];
-  }, [selectedNote?.token, tokenOptions]);
+    if (!selectedNote) return tokenOptions[0];
+    return (
+      tokenOptions.find((t) => noteMatchesTokenOption(selectedNote, t)) ??
+      tokenOptions.find((t) => t.symbol === selectedNote.token) ??
+      tokenOptions[0]
+    );
+  }, [selectedNote, tokenOptions]);
   const resolvedRecipient = recipientMode === "self" ? walletAddress ?? "" : recipient.trim();
   const recipientError =
     recipientMode === "self"
@@ -74,6 +88,8 @@ export default function UnshieldPage() {
     if (!resolvedRecipient || recipientError || amountError) return;
     setLoading(true);
     setStatus("pending");
+    setUnshieldError(null);
+    setLivePipelineStatus("Starting…");
     const transactionId = crypto.randomUUID();
     upsertTransaction({
       id: transactionId,
@@ -85,52 +101,80 @@ export default function UnshieldPage() {
       counterparty: resolvedRecipient as `0x${string}`,
     });
 
-    setProofStep("proof");
-    setEtaSeconds(12);
-    const {executeUnshield} = await import("@/lib/private-transfer");
-    const response = await executeUnshield({
-      relayerUrl: process.env.NEXT_PUBLIC_RELAYER_URL ?? "http://127.0.0.1:8787",
-      shieldedChainId: shieldedRpcChainId,
-      senderSpendingKey: BigInt(spendingKey),
-      senderViewingPriv: BigInt(viewingKey),
-      senderViewingPub: viewingPub as `0x${string}`,
-      senderOwnerPk: BigInt(ownerPk),
-      recipientAddress: resolvedRecipient as `0x${string}`,
-      tokenAddress: selectedNoteMeta.contractAddress,
-      amount: ethers.parseUnits(amount || "0", selectedNoteMeta.decimals),
-      onStatus: (msg) => {
-        if (msg.toLowerCase().includes("generating")) setProofStep("proof");
-        if (msg.toLowerCase().includes("relayer")) {
-          setProofStep("submit");
-          setStatus("submitted");
-          updateTransactionStatus(transactionId, "submitted");
-        }
-      },
-    });
-    setRequestId(response.requestId);
-    setConfirmedHash(response.txHash);
-    markNoteSpent(selectedNote.id, createHex(`nullifier-${selectedNote.id}`));
-    if (changeAmount > 0) {
-      addNote({
-        id: crypto.randomUUID(),
-        token: selectedNote.token,
-        amount: changeAmount.toFixed(6),
-        status: "unspent",
-        commitment: createHex(`unshield-change-${selectedNote.id}`),
-        encryptedNote: createHex(`unshield-change-encrypted-${selectedNote.id}`),
-        discoveredAt: nowIso(),
-        source: "unshield",
-        txHash: response.txHash,
+    try {
+      setProofStep("witness");
+      setEtaSeconds(suggestedEtaForProofStep("witness"));
+      const {executeUnshield} = await import("@/lib/private-transfer");
+      const response = await executeUnshield({
+        relayerUrl: process.env.NEXT_PUBLIC_RELAYER_URL ?? "http://127.0.0.1:8787",
+        shieldedChainId: shieldedRpcChainId,
+        senderSpendingKey: BigInt(spendingKey),
+        senderViewingPriv: BigInt(viewingKey),
+        senderViewingPub: viewingPub as `0x${string}`,
+        senderOwnerPk: BigInt(ownerPk),
+        recipientAddress: resolvedRecipient as `0x${string}`,
+        tokenAddress: selectedNoteMeta.contractAddress,
+        amount: ethers.parseUnits(amount || "0", selectedNoteMeta.decimals),
+        onStatus: (msg) => {
+          setLivePipelineStatus(msg);
+          const next = mapRelayStatusMessageToProofStep(msg);
+          if (next) {
+            setProofStep(next);
+            setEtaSeconds(suggestedEtaForProofStep(next));
+          }
+          if (msg.toLowerCase().includes("submitting")) {
+            setStatus("submitted");
+            updateTransactionStatus(transactionId, "submitted");
+          }
+        },
       });
+      setProofStep("confirm");
+      setEtaSeconds(suggestedEtaForProofStep("confirm"));
+      setLivePipelineStatus("Relayer accepted — withdrawal transaction submitted.");
+      setRequestId(response.requestId);
+      setConfirmedHash(response.txHash);
+      markNoteSpent(selectedNote.id, createHex(`nullifier-${selectedNote.id}`));
+      if (changeAmount > 0) {
+        const changeTokenAddr =
+          selectedNote.tokenContractAddress ??
+          (selectedNoteMeta
+            ? (ethers.getAddress(selectedNoteMeta.contractAddress) as `0x${string}`)
+            : undefined);
+        addNote({
+          id: crypto.randomUUID(),
+          token: selectedNote.token,
+          shieldedChainId: selectedNote.shieldedChainId,
+          ...(changeTokenAddr ? {tokenContractAddress: changeTokenAddr} : {}),
+          amount: changeAmount.toFixed(6),
+          status: "unspent",
+          commitment: createHex(`unshield-change-${selectedNote.id}`),
+          encryptedNote: createHex(`unshield-change-encrypted-${selectedNote.id}`),
+          discoveredAt: nowIso(),
+          source: "unshield",
+          txHash: response.txHash,
+        });
+      }
+      setStatus("confirmed");
+      updateTransactionStatus(transactionId, "confirmed", response.txHash);
+      toast.success(
+        `Withdrawal submitted: ${formatAmount(amount)} ${selectedNote.token}. Amount and recipient will appear on-chain when confirmed.`
+      );
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      console.error("[unshield] failed:", e);
+      setUnshieldError(message);
+      toast.error(message.length > 420 ? `${message.slice(0, 420)}…` : message);
+      setStatus("failed");
+      updateTransactionStatus(transactionId, "failed");
+    } finally {
+      setLoading(false);
+      setLivePipelineStatus(null);
     }
-    setStatus("confirmed");
-    updateTransactionStatus(transactionId, "confirmed", response.txHash);
-    setLoading(false);
   }
 
   return (
     <>
-      <ProofLoader step={proofStep} etaSeconds={etaSeconds} visible={loading} />
+      <ProofLoader step={proofStep} etaSeconds={etaSeconds} visible={loading} liveStatus={livePipelineStatus} variant="unshield" />
       <PageShell
         eyebrow="Public Exit"
         title="Withdraw from private pool."
@@ -207,6 +251,14 @@ export default function UnshieldPage() {
                 Generate proof and unshield
               </Button>
               {recipientError || amountError ? <p className="text-xs text-[#6b7280]">Fix highlighted fields to continue.</p> : null}
+              {unshieldError ? (
+                <p
+                  role="alert"
+                  className="rounded-xl border border-red-200/80 bg-red-50/95 px-4 py-3 text-xs leading-relaxed text-red-950"
+                >
+                  {unshieldError}
+                </p>
+              ) : null}
               {confirmedHash ? (
                 <ActionOutcomeCard
                   title="Withdrawal confirmed"

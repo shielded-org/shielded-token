@@ -1,4 +1,10 @@
-import type {Note, TransactionRecord} from "./types";
+import {ethers} from "ethers";
+import type {Note, ShieldedPoolChainId, TokenDefinition, TransactionRecord} from "./types";
+
+/** Notes tagged for the active shielded pool chain only (ignores stale rows without `shieldedChainId`). */
+export function notesForPoolChain(notes: Note[], chainId: ShieldedPoolChainId): Note[] {
+  return notes.filter((n) => n.shieldedChainId === chainId);
+}
 
 export function cn(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
@@ -41,9 +47,35 @@ export function nowIso() {
   return new Date().toISOString();
 }
 
-export function getTokenTotal(notes: Note[], token: string) {
+/** Last 20 bytes of the 32-byte note `token` field (handles left-padded addresses). */
+export function tokenAddressFromNoteTokenField(raw: string): `0x${string}` | null {
+  try {
+    const word = ethers.zeroPadValue(raw as `0x${string}`, 32);
+    const hex = word.startsWith("0x") ? word.slice(2) : word;
+    const addrHex = hex.slice(-40);
+    return ethers.getAddress(`0x${addrHex}`) as `0x${string}`;
+  } catch {
+    return null;
+  }
+}
+
+export function noteMatchesTokenOption(
+  note: Note,
+  token: Pick<TokenDefinition, "symbol" | "contractAddress">
+): boolean {
+  if (note.token === token.symbol) return true;
+  const got = note.tokenContractAddress?.toLowerCase();
+  if (!got) return false;
+  try {
+    return ethers.getAddress(token.contractAddress).toLowerCase() === got;
+  } catch {
+    return false;
+  }
+}
+
+export function getTokenTotal(notes: Note[], token: Pick<TokenDefinition, "symbol" | "contractAddress">) {
   return notes
-    .filter((note) => note.token === token && note.status === "unspent")
+    .filter((note) => noteMatchesTokenOption(note, token) && note.status === "unspent")
     .reduce((sum, note) => sum + Number(note.amount), 0);
 }
 

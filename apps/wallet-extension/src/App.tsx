@@ -1929,7 +1929,7 @@ export default function App() {
                     <p className="label">Network</p>
                     <div className="menu-line">
                       <span className="muted">Current network</span>
-                      <Badge variant="network">Sepolia</Badge>
+                      <Badge variant="network">{activeNet.label}</Badge>
                     </div>
                   </Card>
                   <Card className="menu-card">

@@ -5,8 +5,13 @@ import type {TokenDefinition} from "./types";
 export const CHAIN_ID_ETH_SEPOLIA = 11155111;
 /** Base Sepolia */
 export const CHAIN_ID_BASE_SEPOLIA = 84532;
+/** Arbitrum Sepolia */
+export const CHAIN_ID_ARBITRUM_SEPOLIA = 421614;
 
-export type ShieldedChainId = typeof CHAIN_ID_ETH_SEPOLIA | typeof CHAIN_ID_BASE_SEPOLIA;
+export type ShieldedChainId =
+  | typeof CHAIN_ID_ETH_SEPOLIA
+  | typeof CHAIN_ID_BASE_SEPOLIA
+  | typeof CHAIN_ID_ARBITRUM_SEPOLIA;
 
 export type ShieldedContracts = {
   poseidon: `0x${string}`;
@@ -119,7 +124,7 @@ const BASE_SEPOLIA_NETWORK: ShieldedNetwork | null =
     ? {
         id: CHAIN_ID_BASE_SEPOLIA,
         label: "Base Sepolia",
-        rpcUrl: process.env.NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL ?? "https://base-sepolia-rpc.publicnode.com",
+        rpcUrl: process.env.NEXT_PUBLIC_BASE_SEPOLIA_RPC_URL ?? "https://sepolia.base.org",
         explorerBaseUrl: "https://sepolia.basescan.org",
         contracts: {
           poseidon: addr(
@@ -162,6 +167,82 @@ const BASE_SEPOLIA_NETWORK: ShieldedNetwork | null =
       }
     : null;
 
+/** When `NEXT_PUBLIC_ARBITRUM_SEPOLIA_POOL_ADDRESS` matches this pool, unset contract env vars default to this public deploy. */
+const ARBITRUM_SEPOLIA_CANONICAL_POOL = "0x3AD3c6ffE9323A58bcf4ADF3E091E07eC6570976";
+
+const ARBITRUM_SEPOLIA_DEPLOYED = {
+  poseidon: "0xAAe87a37cFb56a5E81D0D2587956b7Bc9d1bFA83",
+  poseidonHasher: "0xDb16E79C2321fA4fE89127E7a654d13f5A6D9df8",
+  verifier: "0xB7D117E9127494EeF11D274A316584973E6Ec684",
+  merkleTree: "0xEC71805247833595B77eF444D4e9EF95FFFB0fD5",
+  token: "0x5056ecfD57e1a5D5b9CE15383cD3655fA434f8be",
+  poolDeployBlock: 267768393,
+  defaultPoolTokens: [
+    {address: "0x19DCe2d215C6b7EA1B247460E7FA6A9f7FFc60e8", symbol: "USDC", decimals: 6},
+    {address: "0x01603A654B0d785CF0790614a80a9404f9C5F4D8", symbol: "USDT", decimals: 6},
+    {address: "0xA4421d963f0C89FaAF489FfFC0eb662Fc67C030F", symbol: "DAI", decimals: 18},
+    {address: "0x120d58806E33b07d1eBd6946d4691b13e259712a", symbol: "LINK", decimals: 18},
+  ],
+} as const;
+
+const ARBITRUM_SEPOLIA_POOL = process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_POOL_ADDRESS?.trim() ?? "";
+
+function arbitrumSepoliaUsesDeployedContractSet(poolRaw: string): boolean {
+  if (!poolRaw || !ethers.isAddress(poolRaw)) return false;
+  return ethers.getAddress(poolRaw).toLowerCase() === ARBITRUM_SEPOLIA_CANONICAL_POOL.toLowerCase();
+}
+
+const arbitrumSepoliaDeployedDefaults = arbitrumSepoliaUsesDeployedContractSet(ARBITRUM_SEPOLIA_POOL);
+
+const ARBITRUM_SEPOLIA_NETWORK: ShieldedNetwork | null =
+  ARBITRUM_SEPOLIA_POOL && ethers.isAddress(ARBITRUM_SEPOLIA_POOL)
+    ? {
+        id: CHAIN_ID_ARBITRUM_SEPOLIA,
+        label: "Arbitrum Sepolia",
+        rpcUrl:
+          process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_RPC_URL ?? "https://sepolia-rollup.arbitrum.io/rpc",
+        explorerBaseUrl: "https://sepolia.arbiscan.io",
+        contracts: {
+          poseidon: addr(
+            "NEXT_PUBLIC_ARBITRUM_SEPOLIA_POSEIDON_ADDRESS",
+            arbitrumSepoliaDeployedDefaults ? (ARBITRUM_SEPOLIA_DEPLOYED.poseidon as `0x${string}`) : Z
+          ),
+          poseidonHasher: addr(
+            "NEXT_PUBLIC_ARBITRUM_SEPOLIA_POSEIDON_HASHER_ADDRESS",
+            arbitrumSepoliaDeployedDefaults ? (ARBITRUM_SEPOLIA_DEPLOYED.poseidonHasher as `0x${string}`) : Z
+          ),
+          verifier: addr(
+            "NEXT_PUBLIC_ARBITRUM_SEPOLIA_VERIFIER_ADDRESS",
+            arbitrumSepoliaDeployedDefaults ? (ARBITRUM_SEPOLIA_DEPLOYED.verifier as `0x${string}`) : Z
+          ),
+          merkleTree: addr(
+            "NEXT_PUBLIC_ARBITRUM_SEPOLIA_MERKLE_TREE_ADDRESS",
+            arbitrumSepoliaDeployedDefaults ? (ARBITRUM_SEPOLIA_DEPLOYED.merkleTree as `0x${string}`) : Z
+          ),
+          pool: ethers.getAddress(ARBITRUM_SEPOLIA_POOL) as `0x${string}`,
+          token: addr(
+            "NEXT_PUBLIC_ARBITRUM_SEPOLIA_TOKEN_ADDRESS",
+            arbitrumSepoliaDeployedDefaults ? (ARBITRUM_SEPOLIA_DEPLOYED.token as `0x${string}`) : Z
+          ),
+        },
+        poolDeployBlock: num(
+          "NEXT_PUBLIC_ARBITRUM_SEPOLIA_POOL_DEPLOY_BLOCK",
+          arbitrumSepoliaDeployedDefaults ? ARBITRUM_SEPOLIA_DEPLOYED.poolDeployBlock : 0
+        ),
+        defaultPoolTokens: (() => {
+          const parsed = parsePoolTokensJson(process.env.NEXT_PUBLIC_ARBITRUM_SEPOLIA_POOL_TOKENS_JSON);
+          if (parsed.length) return parsed;
+          return arbitrumSepoliaDeployedDefaults
+            ? (ARBITRUM_SEPOLIA_DEPLOYED.defaultPoolTokens.map((t) => ({
+                address: ethers.getAddress(t.address) as `0x${string}`,
+                symbol: t.symbol,
+                decimals: t.decimals,
+              })) as ShieldedNetwork["defaultPoolTokens"])
+            : [];
+        })(),
+      }
+    : null;
+
 export function getShieldedNetworks(): ShieldedNetwork[] {
   const out: ShieldedNetwork[] = [ETH_SEPOLIA_NETWORK];
   if (BASE_SEPOLIA_NETWORK && BASE_SEPOLIA_NETWORK.contracts.pool !== ethers.ZeroAddress) {
@@ -172,6 +253,16 @@ export function getShieldedNetworks(): ShieldedNetwork[] {
       c.verifier !== ethers.ZeroAddress;
     if (configured) {
       out.push(BASE_SEPOLIA_NETWORK);
+    }
+  }
+  if (ARBITRUM_SEPOLIA_NETWORK && ARBITRUM_SEPOLIA_NETWORK.contracts.pool !== ethers.ZeroAddress) {
+    const c = ARBITRUM_SEPOLIA_NETWORK.contracts;
+    const configured =
+      c.poseidon !== ethers.ZeroAddress &&
+      c.merkleTree !== ethers.ZeroAddress &&
+      c.verifier !== ethers.ZeroAddress;
+    if (configured) {
+      out.push(ARBITRUM_SEPOLIA_NETWORK);
     }
   }
   return out;
@@ -186,6 +277,10 @@ export function defaultShieldedChainId(): ShieldedChainId {
   if (fromEnv === CHAIN_ID_BASE_SEPOLIA && BASE_SEPOLIA_NETWORK) {
     const ok = getShieldedNetworks().some((n) => n.id === CHAIN_ID_BASE_SEPOLIA);
     if (ok) return CHAIN_ID_BASE_SEPOLIA;
+  }
+  if (fromEnv === CHAIN_ID_ARBITRUM_SEPOLIA && ARBITRUM_SEPOLIA_NETWORK) {
+    const ok = getShieldedNetworks().some((n) => n.id === CHAIN_ID_ARBITRUM_SEPOLIA);
+    if (ok) return CHAIN_ID_ARBITRUM_SEPOLIA;
   }
   return CHAIN_ID_ETH_SEPOLIA;
 }
@@ -222,4 +317,30 @@ export function buildTokenDefinitionsForShieldedNetwork(net: ShieldedNetwork): T
     icon: t.symbol.slice(0, 1).toUpperCase(),
     contractAddress: t.address,
   }));
+}
+
+/**
+ * Pool token pickers and balance reads must use contract addresses from `getShieldedNetwork`,
+ * never raw `storeTokens` alone (stale or cross-chain rows would call the wrong `balanceOf`).
+ * Optional store entries overlay symbol/name/decimals when `contractAddress` matches.
+ */
+export function tokenOptionsForShieldedPool(
+  shieldedRpcChainId: ShieldedChainId,
+  storeTokens: TokenDefinition[]
+): TokenDefinition[] {
+  const net = getShieldedNetwork(shieldedRpcChainId) ?? getShieldedNetwork(CHAIN_ID_ETH_SEPOLIA)!;
+  const fromConfig = buildTokenDefinitionsForShieldedNetwork(net);
+  if (storeTokens.length === 0) return fromConfig;
+  const byAddr = new Map(storeTokens.map((t) => [t.contractAddress.toLowerCase(), t]));
+  return fromConfig.map((t) => {
+    const s = byAddr.get(t.contractAddress.toLowerCase());
+    if (!s) return t;
+    return {
+      ...t,
+      symbol: s.symbol,
+      name: s.name,
+      decimals: s.decimals,
+      icon: s.icon,
+    };
+  });
 }

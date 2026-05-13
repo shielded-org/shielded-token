@@ -3,8 +3,42 @@
 import {create} from "zustand";
 import {createJSONStorage, persist} from "zustand/middleware";
 import {TOKENS} from "@/lib/constants";
-import {defaultShieldedChainId, normalizeStoredShieldedChainId, type ShieldedChainId} from "@/lib/networks";
-import type {AppMode, Note, RelayerHealth, TokenDefinition, TransactionRecord, TransactionStatus} from "@/lib/types";
+import {
+  buildTokenDefinitionsForShieldedNetwork,
+  CHAIN_ID_ETH_SEPOLIA,
+  defaultShieldedChainId,
+  getShieldedNetwork,
+  normalizeStoredShieldedChainId,
+  type ShieldedChainId,
+} from "@/lib/networks";
+import type {
+  AppMode,
+  Note,
+  RelayerHealth,
+  ShieldedPoolChainId,
+  ShieldedScanCacheRow,
+  TokenDefinition,
+  TransactionRecord,
+  TransactionStatus,
+} from "@/lib/types";
+
+/** In-memory noop so `persist` always attaches `api.persist` during SSR (real `localStorage` would throw). */
+const ssrNoopWebStorage = {
+  getItem: () => null,
+  setItem: () => {},
+  removeItem: () => {},
+} as unknown as Storage;
+
+function getShieldedPersistStorage(): Storage {
+  if (typeof window === "undefined") return ssrNoopWebStorage;
+  return window.localStorage;
+}
+
+/** Always match pool token addresses to the active shielded chain (never persist cross-chain addresses). */
+function tokensForShieldedChain(chainId: ShieldedChainId): TokenDefinition[] {
+  const net = getShieldedNetwork(chainId) ?? getShieldedNetwork(CHAIN_ID_ETH_SEPOLIA);
+  return net ? buildTokenDefinitionsForShieldedNetwork(net) : TOKENS;
+}
 
 type ShieldedState = {
   spendingKey: string;
@@ -24,6 +58,10 @@ type ShieldedState = {
   revealBalances: boolean;
   transactions: TransactionRecord[];
   relayerHealth: RelayerHealth;
+  /** Incremental RoutedCommitment scan cache per pool (parity with wallet-extension local scan cache). */
+  shieldedScanCacheByPool: Record<string, ShieldedScanCacheRow>;
+  /** True while the first note sync of the current scan cycle is in flight (or pool switched / keys refreshed). */
+  shieldedBalanceLoading: boolean;
   setMode: (mode: AppMode) => void;
   setRevealBalances: (value: boolean) => void;
   setTokens: (tokens: TokenDefinition[]) => void;
@@ -40,6 +78,10 @@ type ShieldedState = {
   setNotes: (notes: Note[]) => void;
   setLastSyncedBlock: (block: number) => void;
   setRelayerHealth: (health: RelayerHealth) => void;
+  setShieldedScanCacheEntry: (key: string, row: ShieldedScanCacheRow) => void;
+  setShieldedBalanceLoading: (loading: boolean) => void;
+  /** Recompute Poseidon `ownerPk` for the active shielded network without a new wallet signature. */
+  setOwnerPk: (ownerPk: string) => void;
   addNote: (note: Note) => void;
   upsertTransaction: (transaction: TransactionRecord) => void;
   updateTransactionStatus: (id: string, status: TransactionStatus, txHash?: `0x${string}`) => void;
@@ -57,7 +99,7 @@ export const useShieldedStore = create<ShieldedState>()(
       walletAddress: null,
       chainId: null,
       shieldedRpcChainId: defaultShieldedChainId(),
-      tokens: TOKENS,
+      tokens: tokensForShieldedChain(defaultShieldedChainId()),
       notes: [],
       nullifiers: [],
       mode: "pool",
@@ -69,11 +111,32 @@ export const useShieldedStore = create<ShieldedState>()(
         latencyMs: 82,
         checkedAt: new Date().toISOString(),
       },
+      shieldedScanCacheByPool: {},
+      shieldedBalanceLoading: false,
       setMode: (mode) => set({mode}),
       setRevealBalances: (revealBalances) => set({revealBalances}),
       setTokens: (tokens) => set({tokens}),
       setWalletConnection: (walletAddress, chainId) => set({walletAddress, chainId}),
-      setShieldedRpcChainId: (shieldedRpcChainId) => set({shieldedRpcChainId: normalizeStoredShieldedChainId(shieldedRpcChainId)}),
+      setShieldedRpcChainId: (shieldedRpcChainId) =>
+        set((state) => {
+          const next = normalizeStoredShieldedChainId(shieldedRpcChainId);
+          const same = state.shieldedRpcChainId === next;
+          return {
+            shieldedRpcChainId: next,
+            tokens: tokensForShieldedChain(next),
+            ...(same
+              ? {}
+              : {
+                  notes: [],
+                  lastSyncedBlock: getShieldedNetwork(next)?.poolDeployBlock ?? 0,
+                  transactions: [],
+                  nullifiers: [],
+                  shieldedBalanceLoading: Boolean(state.viewingKey),
+                  /** Keep `shieldedScanCacheByPool` — entries are keyed per pool; wiping them forced a cold
+                   * `eth_getLogs` from deploy on every L2 switch (~10s) and could interact badly with in-flight scans. */
+                }),
+          };
+        }),
       setKeyMaterial: (keys) =>
         set({
           spendingKey: keys.spendingKey,
@@ -81,6 +144,8 @@ export const useShieldedStore = create<ShieldedState>()(
           viewingPub: keys.viewingPub,
           ownerPk: keys.ownerPk,
           keyMaterialAddress: keys.keyMaterialAddress,
+          shieldedScanCacheByPool: {},
+          shieldedBalanceLoading: true,
         }),
       clearKeyMaterial: () =>
         set({
@@ -89,10 +154,18 @@ export const useShieldedStore = create<ShieldedState>()(
           viewingPub: null,
           ownerPk: "",
           keyMaterialAddress: null,
+          shieldedScanCacheByPool: {},
+          shieldedBalanceLoading: false,
         }),
       setNotes: (notes) => set({notes}),
       setLastSyncedBlock: (lastSyncedBlock) => set({lastSyncedBlock}),
       setRelayerHealth: (relayerHealth) => set({relayerHealth}),
+      setShieldedScanCacheEntry: (key, row) =>
+        set((state) => ({
+          shieldedScanCacheByPool: {...state.shieldedScanCacheByPool, [key]: row},
+        })),
+      setShieldedBalanceLoading: (shieldedBalanceLoading) => set({shieldedBalanceLoading}),
+      setOwnerPk: (ownerPk) => set({ownerPk}),
       addNote: (note) =>
         set((state) => ({
           notes: [note, ...state.notes],
@@ -139,7 +212,25 @@ export const useShieldedStore = create<ShieldedState>()(
     }),
     {
       name: "shielded-token-store",
-      storage: createJSONStorage(() => localStorage),
+      storage: createJSONStorage(getShieldedPersistStorage),
+      merge: (persisted, current) => {
+        const p = persisted as Partial<ShieldedState>;
+        const merged = {...current, ...p};
+        const nextChain = normalizeStoredShieldedChainId(p.shieldedRpcChainId ?? merged.shieldedRpcChainId);
+        merged.shieldedRpcChainId = nextChain;
+        merged.tokens = tokensForShieldedChain(nextChain);
+        merged.shieldedScanCacheByPool = p.shieldedScanCacheByPool ?? merged.shieldedScanCacheByPool ?? {};
+        merged.shieldedBalanceLoading = false;
+        /** Pre-`shieldedChainId` persisted notes were always for the saved pool network (notes cleared on switch). */
+        if (Array.isArray(merged.notes)) {
+          merged.notes = merged.notes.map((note) =>
+            note.shieldedChainId != null
+              ? note
+              : ({...note, shieldedChainId: nextChain as ShieldedPoolChainId} satisfies Note)
+          );
+        }
+        return merged;
+      },
       partialize: (state) => ({
         spendingKey: state.spendingKey,
         viewingKey: state.viewingKey,
@@ -149,13 +240,13 @@ export const useShieldedStore = create<ShieldedState>()(
         walletAddress: state.walletAddress,
         chainId: state.chainId,
         shieldedRpcChainId: normalizeStoredShieldedChainId(state.shieldedRpcChainId),
-        tokens: state.tokens,
         notes: state.notes,
         nullifiers: state.nullifiers,
         mode: state.mode,
         lastSyncedBlock: state.lastSyncedBlock,
         revealBalances: state.revealBalances,
         transactions: state.transactions,
+        shieldedScanCacheByPool: state.shieldedScanCacheByPool,
       }),
     }
   )

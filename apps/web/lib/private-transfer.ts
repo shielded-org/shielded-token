@@ -1,9 +1,16 @@
 import {ethers} from "ethers";
 import {buildMerklePathForCommitment} from "./merkle";
 import {generateProof, generateUnshieldProof} from "./proving";
-import {scanShieldedNotes, type DecryptedNote} from "./shielded";
+import type {DecryptedNote} from "./shielded";
 import {POOL_ABI, POSEIDON_ABI} from "./shielded-config";
-import {CHAIN_ID_ETH_SEPOLIA, getShieldedNetwork, type ShieldedChainId} from "./networks";
+import {scanShieldedNotesWithRpcFallback} from "./shielded-integration";
+import {
+  CHAIN_ID_ARBITRUM_SEPOLIA,
+  CHAIN_ID_BASE_SEPOLIA,
+  CHAIN_ID_ETH_SEPOLIA,
+  getShieldedNetwork,
+  type ShieldedChainId,
+} from "./networks";
 import {getWorkingReadProvider} from "./rpc-read";
 
 function toHex32(v: bigint): `0x${string}` {
@@ -77,6 +84,34 @@ function requireNet(chainId: ShieldedChainId) {
   return net;
 }
 
+function rpcEnvHintForChain(chainId: number): string {
+  if (chainId === CHAIN_ID_ARBITRUM_SEPOLIA) return "RELAYER_RPC_URL_ARBITRUM_SEPOLIA";
+  if (chainId === CHAIN_ID_BASE_SEPOLIA) return "RELAYER_RPC_URL_BASE_SEPOLIA";
+  if (chainId === CHAIN_ID_ETH_SEPOLIA) return "RELAYER_RPC_URL_ETH_SEPOLIA (or RELAYER_RPC_URL)";
+  return "RELAYER_RPC_URL_* for this chain id";
+}
+
+function formatRelayerFetchFailure(relayerUrl: string, chainId: number, cause: unknown): string {
+  const net = getShieldedNetwork(chainId);
+  const label = net?.label ?? `chain id ${chainId}`;
+  const rpcEnv = rpcEnvHintForChain(chainId);
+  let detail: string;
+  if (cause instanceof Error) {
+    detail =
+      cause.name === "AbortError" || /aborted/i.test(cause.message)
+        ? "request timed out or was aborted"
+        : cause.message;
+  } else {
+    detail = String(cause);
+  }
+  return [
+    `Cannot reach relayer at ${relayerUrl} (${label}).`,
+    `Start it from the repo root: npm run dev:relayer`,
+    `Set RELAYER_SIGNER_PRIVATE_KEY (or RELAYER_SIGNER_PRIVATE_KEYS) and ${rpcEnv}.`,
+    `Underlying: ${detail}`,
+  ].join(" ");
+}
+
 export async function executePrivateTransfer(params: {
   relayerUrl: string;
   shieldedChainId?: ShieldedChainId;
@@ -107,11 +142,17 @@ export async function executePrivateTransfer(params: {
   const tokenFieldNorm = tokenField.toLowerCase();
   const scanFromBlock = params.scanFromBlock ?? net.poolDeployBlock;
   mark(`Scanning shielded notes from block ${scanFromBlock}`);
-  const scan = await scanShieldedNotes({provider, poolAddress: net.contracts.pool, fromBlock: scanFromBlock, viewingPriv: params.senderViewingPriv, viewingPub: params.senderViewingPub});
+  const scan = await scanShieldedNotesWithRpcFallback(net, {
+    poolAddress: net.contracts.pool,
+    fromBlock: scanFromBlock,
+    viewingPriv: params.senderViewingPriv,
+    viewingPub: params.senderViewingPub,
+  });
   const merged = [...(params.cachedNotes ?? []), ...scan.notes];
   const dedup = new Map<string, DecryptedNote>();
   for (const n of merged) dedup.set(`${n.commitment}:${n.txHash}`, n);
   const discovered = Array.from(dedup.values());
+  mark("Checking spend status of discovered notes…");
   const spendable: DecryptedNote[] = [];
   for (const note of discovered) {
     const noteTokenField = normalizeTokenField(note.token);
@@ -135,6 +176,7 @@ export async function executePrivateTransfer(params: {
   const nullifier1 = "0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`;
   const outCommitment0 = await noteCommitment(poseidon, params.recipientOwnerPk, tokenField, recipientAmount, outBlinding0);
   const outCommitment1 = await noteCommitment(poseidon, params.senderOwnerPk, tokenField, changeAmount, outBlinding1);
+  mark("Loading Merkle tree (LeafInserted logs) — can take a while on L2 RPCs…");
   const merkleSingle = await buildMerklePathForCommitment({
     provider,
     poseidonAddress: net.contracts.poseidon,
@@ -145,7 +187,7 @@ export async function executePrivateTransfer(params: {
   const zero32 = "0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`;
   const zeroPath = new Array(20).fill(zero32) as `0x${string}`[];
   const zeroDirs = new Array(20).fill(false) as boolean[];
-  mark("Generating proof");
+  mark("Generating zero-knowledge proof in-browser — keep this tab focused (often 30s–several minutes)…");
   const proof = await generateProof({
     spendingKey: params.senderSpendingKey,
     inAmounts: [candidate.amount, 0n],
@@ -192,6 +234,8 @@ export async function executePrivateTransfer(params: {
         gasLimit: 16_000_000,
       }),
     });
+  } catch (err) {
+    throw new Error(formatRelayerFetchFailure(params.relayerUrl, chainId, err));
   } finally {
     clearTimeout(timeout);
   }
@@ -228,11 +272,17 @@ export async function executeUnshield(params: {
   const tokenFieldNorm = tokenField.toLowerCase();
   const scanFromBlock = params.scanFromBlock ?? net.poolDeployBlock;
   mark(`Scanning shielded notes from block ${scanFromBlock}`);
-  const scan = await scanShieldedNotes({provider, poolAddress: net.contracts.pool, fromBlock: scanFromBlock, viewingPriv: params.senderViewingPriv, viewingPub: params.senderViewingPub});
+  const scan = await scanShieldedNotesWithRpcFallback(net, {
+    poolAddress: net.contracts.pool,
+    fromBlock: scanFromBlock,
+    viewingPriv: params.senderViewingPriv,
+    viewingPub: params.senderViewingPub,
+  });
   const merged = [...(params.cachedNotes ?? []), ...scan.notes];
   const dedup = new Map<string, DecryptedNote>();
   for (const n of merged) dedup.set(`${n.commitment}:${n.txHash}`, n);
   const discovered = Array.from(dedup.values());
+  mark("Checking spend status of candidate notes…");
   const candidates: DecryptedNote[] = [];
   for (const note of discovered) {
     const noteTokenField = normalizeTokenField(note.token);
@@ -256,6 +306,7 @@ export async function executeUnshield(params: {
       : ("0x" as `0x${string}`);
   const changeRoute = routeForRecipient(params.senderViewingPub, 0);
   const nullifier = await poseidonHash2(poseidon, params.senderSpendingKey, BigInt(note.commitment));
+  mark("Loading Merkle tree for your withdrawal note…");
   const merkle = await buildMerklePathForCommitment({
     provider,
     poseidonAddress: net.contracts.poseidon,
@@ -263,7 +314,7 @@ export async function executeUnshield(params: {
     targetCommitment: note.commitment,
     poolDeployBlock: net.poolDeployBlock,
   });
-  mark("Generating unshield proof");
+  mark("Generating unshield proof in-browser — keep this tab focused…");
   const proof = await generateUnshieldProof({
     spendingKey: params.senderSpendingKey,
     inAmount: note.amount,
@@ -282,6 +333,7 @@ export async function executeUnshield(params: {
     changeCommitment,
   });
 
+  mark("Submitting withdrawal bundle to relayer…");
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), relayerTimeoutMs);
   let res: Response;
@@ -306,6 +358,8 @@ export async function executeUnshield(params: {
         gasLimit: 16_000_000,
       }),
     });
+  } catch (err) {
+    throw new Error(formatRelayerFetchFailure(params.relayerUrl, chainId, err));
   } finally {
     clearTimeout(timeout);
   }

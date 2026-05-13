@@ -1,0 +1,40 @@
+{
+  "network": "arbitrum-sepolia",
+  "chainId": 421614,
+  "rpcUrl": "https://sepolia-rollup.arbitrum.io/rpc",
+  "blockExplorer": "https://sepolia.arbiscan.io",
+  "deployer": "0x82E6d844629b734a118c339B9f80e404f117DF61",
+  "mintAmountHuman": "10000",
+  "recipients": [],
+  "tokens": [
+    {
+      "key": "USDC",
+      "name": "USD Coin",
+      "symbol": "USDC",
+      "decimals": 6,
+      "address": "0x19DCe2d215C6b7EA1B247460E7FA6A9f7FFc60e8"
+    },
+    {
+      "key": "USDT",
+      "name": "Tether USD",
+      "symbol": "USDT",
+      "decimals": 6,
+      "address": "0x01603A654B0d785CF0790614a80a9404f9C5F4D8"
+    },
+    {
+      "key": "DAI",
+      "name": "Dai Stablecoin",
+      "symbol": "DAI",
+      "decimals": 18,
+      "address": "0xA4421d963f0C89FaAF489FfFC0eb662Fc67C030F"
+    },
+    {
+      "key": "LINK",
+      "name": "ChainLink Token",
+      "symbol": "LINK",
+      "decimals": 18,
+      "address": "0x120d58806E33b07d1eBd6946d4691b13e259712a"
+    }
+  ],
+  "deployedAt": "2026-05-12T18:56:48.221Z"
+}

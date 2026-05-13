@@ -19,6 +19,7 @@ npm run dev --workspace @zkproject/relayer
 - `RELAYER_PRIMARY_CHAIN_ID` — numeric chain id for `RELAYER_RPC_URL` (e.g. `31337` for Anvil)
 - `RELAYER_RPC_URL_ETH_SEPOLIA` — RPC for Ethereum Sepolia (`11155111`); required to relay on that chain
 - `RELAYER_RPC_URL_BASE_SEPOLIA` — RPC for Base Sepolia (`84532`); required to relay on that chain
+- `RELAYER_RPC_URL_ARBITRUM_SEPOLIA` — RPC for Arbitrum Sepolia (`421614`); required to relay on that chain
 - `RELAYER_SIGNER_PRIVATE_KEYS` comma-separated private keys (preferred; round-robin signer selection)
 - `RELAYER_SIGNER_PRIVATE_KEY` single-key fallback (legacy)
 - `RELAYER_SHIELDED_TRANSFER_GAS_LIMIT` (default `16000000`) — public RPCs such as Sepolia often reject txs above ~16.7M gas
@@ -27,7 +28,7 @@ If RPC and signer are not configured, the relayer falls back to stub mode and re
 
 ## Request payload
 
-Include `chainId` (`11155111` or `84532`) so the relayer selects the correct RPC and signer pool. When omitted, the relayer defaults to Ethereum Sepolia.
+Include `chainId` (`11155111`, `84532`, or `421614`) so the relayer selects the correct RPC and signer pool. When omitted, the relayer defaults to Ethereum Sepolia.
 
 `POST /relay/shielded-transfer` expects:
 
