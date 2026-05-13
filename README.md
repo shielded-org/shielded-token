@@ -55,6 +55,8 @@ Shielding and unshielding remain **boundary actions** on a public chain (visible
 - `services/relayer`: HTTP relayer for submitting shielded transfers on-chain
 - `scripts/hardhat-local-e2e.mjs`: complete local E2E orchestration
 - `scripts/sepolia-e2e.mjs`: same flow against Sepolia (deploy or reuse addresses, optional transfers-only)
+- `scripts/arbitrum-sepolia-pool-deploy.mjs`: Arbitrum Sepolia pool deploy (`npm run deploy:pool:arbitrum-sepolia`)
+- `scripts/probe-arbitrum-sepolia-rpc.mjs`: RPC / `eth_getLogs` smoke probe (`npm run probe:arbitrum-rpc`)
 - `apps/web`: frontend shell (not required for CLI E2E)
 
 ---
@@ -98,7 +100,7 @@ UltraHonk Solidity verifier generated from circuit VK using `bb contract`.
 
 ## Deployed testnet contracts (reference)
 
-These addresses are checked into the repo as deployment snapshots (`scripts/sepolia-pool-deployment.json`, `scripts/base-sepolia-pool-deployment.json`, `scripts/sepolia-mock-erc20-deployment.json`, `scripts/base-sepolia-mock-erc20-deployment.json`). If you redeploy, update those JSON files and your app env (`NEXT_PUBLIC_*` / `VITE_*`) to match.
+These addresses are checked into the repo as deployment snapshots (`scripts/sepolia-pool-deployment.json`, `scripts/base-sepolia-pool-deployment.json`, `scripts/arbitrum-sepolia-pool-deployment.json`, `scripts/sepolia-mock-erc20-deployment.json`, `scripts/base-sepolia-mock-erc20-deployment.json`, `scripts/arbitrum-sepolia-mock-erc20-deployment.json`). If you redeploy, update those JSON files and your app env (`NEXT_PUBLIC_*` / `VITE_*`) to match.
 
 On explorers, the in-repo verifier artifact is **`UltraVerifier`** (from `packages/contracts/src/HonkVerifier.sol`). Other deploys use the same Solidity names: `Poseidon2`, `Poseidon2YulHasher`, `IncrementalMerkleTree`, `ShieldedERC20Pool`, `MockERC20`.
 
@@ -145,6 +147,60 @@ Indexed from block **10744004** for this pool deployment (see `poolDeployBlock` 
 | LINK | 18 | `0x819EA63eB94992766c935B8C34D00b259cF45BF6` |
 
 Indexed from block **41373731** for this pool deployment (see `poolDeployBlock` in `scripts/base-sepolia-pool-deployment.json`).
+
+### Arbitrum Sepolia (chain id `421614`)
+
+Arbitrum Sepolia uses the same **multi-token pool** stack as Base Sepolia: `ShieldedERC20Pool`, `IncrementalMerkleTree`, Poseidon helpers, `UltraVerifier`, and batch `MockERC20` stables. Notes, scans, and proofs are **per chain**: switching the in-app **Pool network** targets this chain’s pool and RPC read path (and can prompt MetaMask to switch when a wallet is connected).
+
+#### Deploy & allowlist (new environment)
+
+1. Copy `.env.arbitrum-sepolia.example` to `.env.arbitrum-sepolia`, set `PRIVATE_KEY`, and set `TESTNET_RPC_URL` (defaults to `https://sepolia-rollup.arbitrum.io/rpc`).
+2. Run `npm run deploy:pool:arbitrum-sepolia` (writes `scripts/arbitrum-sepolia-pool-deployment.json`).
+3. Deploy mock USDC/USDT/DAI/LINK with `npm run deploy:mock-tokens-batch` using `TESTNET_CHAIN_ID=421614`, `DEPLOYMENT_JSON=scripts/arbitrum-sepolia-mock-erc20-deployment.json`, and the same RPC URL as step 1.
+4. Run `node --env-file=.env.arbitrum-sepolia scripts/enable-pool-tokens.mjs` so the pool allowlists those tokens.
+5. Point clients at your pool: set `NEXT_PUBLIC_ARBITRUM_SEPOLIA_POOL_ADDRESS` (web) and/or `VITE_ARBITRUM_SEPOLIA_POOL_ADDRESS` (extension) to the deployed `ShieldedERC20Pool`. When the address matches the **canonical** pool baked into `apps/web/lib/networks.ts` / `apps/wallet-extension/src/networks.ts`, the rest of the contract set is inferred; otherwise set the matching `NEXT_PUBLIC_ARBITRUM_SEPOLIA_*` / `VITE_ARBITRUM_SEPOLIA_*` overrides from your deployment JSON.
+6. Relayer: set `RELAYER_RPC_URL_ARBITRUM_SEPOLIA` in `services/relayer/.env` (see `services/relayer/README.md`). Fund relayer signers with **Arbitrum Sepolia ETH** for gas.
+
+#### Reference deploy (repo snapshot)
+
+Always verify on-chain (bytecode + labels); prefer values from `scripts/arbitrum-sepolia-pool-deployment.json` and `scripts/arbitrum-sepolia-mock-erc20-deployment.json` after your own deploy. Same-address strings can appear on different chains by coincidence—confirm **chain id 421614** on [Arbiscan Sepolia](https://sepolia.arbiscan.io).
+
+| Contract | Address | Explorer |
+| --- | --- | --- |
+| `Poseidon2` | `0xAAe87a37cFb56a5E81D0D2587956b7Bc9d1bFA83` | [Arbiscan](https://sepolia.arbiscan.io/address/0xAAe87a37cFb56a5E81D0D2587956b7Bc9d1bFA83) |
+| `Poseidon2YulHasher` | `0xDb16E79C2321fA4fE89127E7a654d13f5A6D9df8` | [Arbiscan](https://sepolia.arbiscan.io/address/0xDb16E79C2321fA4fE89127E7a654d13f5A6D9df8) |
+| `UltraVerifier` | `0xB7D117E9127494EeF11D274A316584973E6Ec684` | [Arbiscan](https://sepolia.arbiscan.io/address/0xB7D117E9127494EeF11D274A316584973E6Ec684) |
+| `IncrementalMerkleTree` | `0xEC71805247833595B77eF444D4e9EF95FFFB0fD5` | [Arbiscan](https://sepolia.arbiscan.io/address/0xEC71805247833595B77eF444D4e9EF95FFFB0fD5) |
+| `ShieldedERC20Pool` | `0x3AD3c6ffE9323A58bcf4ADF3E091E07eC6570976` | [Arbiscan](https://sepolia.arbiscan.io/address/0x3AD3c6ffE9323A58bcf4ADF3E091E07eC6570976) |
+| `MockERC20` (pool primary **MOCK**, 18 decimals) | `0x5056ecfD57e1a5D5b9CE15383cD3655fA434f8be` | [Arbiscan](https://sepolia.arbiscan.io/address/0x5056ecfD57e1a5D5b9CE15383cD3655fA434f8be) |
+
+**Arbitrum Sepolia batch mocks** (`scripts/arbitrum-sepolia-mock-erc20-deployment.json`):
+
+| Symbol | Decimals | Address | Explorer |
+| --- | ---: | --- | --- |
+| USDC | 6 | `0x19DCe2d215C6b7EA1B247460E7FA6A9f7FFc60e8` | [Arbiscan](https://sepolia.arbiscan.io/address/0x19DCe2d215C6b7EA1B247460E7FA6A9f7FFc60e8) |
+| USDT | 6 | `0x01603A654B0d785CF0790614a80a9404f9C5F4D8` | [Arbiscan](https://sepolia.arbiscan.io/address/0x01603A654B0d785CF0790614a80a9404f9C5F4D8) |
+| DAI | 18 | `0xA4421d963f0C89FaAF489FfFC0eb662Fc67C030F` | [Arbiscan](https://sepolia.arbiscan.io/address/0xA4421d963f0C89FaAF489FfFC0eb662Fc67C030F) |
+| LINK | 18 | `0x120d58806E33b07d1eBd6946d4691b13e259712a` | [Arbiscan](https://sepolia.arbiscan.io/address/0x120d58806E33b07d1eBd6946d4691b13e259712a) |
+
+**Indexing / scans:** `poolDeployBlock` for this snapshot is **267768393** (see `scripts/arbitrum-sepolia-pool-deployment.json`). The web app scans `RoutedCommitment` logs from that block upward; the first full pass can take noticeable time on public RPCs.
+
+#### Web app & wallet extension
+
+| Concern | What to set |
+| --- | --- |
+| Pool address | `NEXT_PUBLIC_ARBITRUM_SEPOLIA_POOL_ADDRESS` (web), `VITE_ARBITRUM_SEPOLIA_POOL_ADDRESS` (extension) when not using the default baked into `networks.ts`. |
+| Read RPC list (optional) | `NEXT_PUBLIC_ARBITRUM_SEPOLIA_RPC_URLS` — comma-separated URLs; merged with curated fallbacks in `apps/web/lib/rpc-read.ts`. Premium hosts (Alchemy / Infura / QuickNode) are tried **after** public mirrors to reduce 429s during multi-RPC log merges. |
+| Default read order (if you only rely on fallbacks) | `https://sepolia-rollup.arbitrum.io/rpc` → `https://arbitrum-sepolia-rpc.publicnode.com` → `https://arbitrum-sepolia.gateway.tenderly.co` (see `ARBITRUM_SEPOLIA_READ_RPC_FALLBACKS`). |
+| Relayer URL | `NEXT_PUBLIC_RELAYER_URL` must point at your running relayer; relayer must have `RELAYER_RPC_URL_ARBITRUM_SEPOLIA` for chain `421614`. |
+| Debug scans | `NEXT_PUBLIC_SHIELDED_SCAN_DEBUG=1` (or the localStorage flag documented in `apps/web/lib/shielded-scan-debug.ts`) for verbose `shielded-scan` logs. |
+| RPC smoke test | `npm run probe:arbitrum-rpc` — probes head block and a small `eth_getLogs` window against candidate URLs. |
+
+**Browser / RPC caveats:** many public endpoints cap `eth_getLogs` block span (often **~2000 blocks**). The app chunks Merkle `LeafInserted` reads accordingly; shielded note scans use smaller L2 chunk sizes and can merge results across mirrors. If you see `Failed to fetch` or flaky scans, add a dedicated RPC in `NEXT_PUBLIC_ARBITRUM_SEPOLIA_RPC_URLS` or switch the wallet RPC in MetaMask to the same chain.
+
+#### Relayer & `chainId`
+
+Relay requests must include `chainId: 421614` for Arbitrum Sepolia so the relayer picks `RELAYER_RPC_URL_ARBITRUM_SEPOLIA` and the correct signer pool (see `services/relayer/README.md`).
 
 ---
 
@@ -378,6 +434,13 @@ Compile circuits:
 
 ```bash
 npm run build:circuits
+```
+
+Arbitrum Sepolia (pool deploy + RPC probe):
+
+```bash
+npm run deploy:pool:arbitrum-sepolia
+npm run probe:arbitrum-rpc
 ```
 
 Relayer smoke test:

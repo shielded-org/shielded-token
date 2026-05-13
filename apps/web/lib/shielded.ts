@@ -1,5 +1,6 @@
 import {ethers} from "ethers";
 import {POOL_ABI} from "./shielded-config";
+import {shieldedScanDebug, shieldedScanDebugEnabled} from "./shielded-scan-debug";
 
 export type DecryptedNote = {
   commitment: `0x${string}`;
@@ -37,6 +38,41 @@ async function ethGetLogsRange(
 }
 
 /**
+ * Block windows to try for `eth_getLogs` when the caller does not pin a preferred max span.
+ * Descending: try a wide range first, shrink on RPC errors (typical L1 public nodes).
+ */
+const DEFAULT_LOG_CHUNK_SIZES_DESC = [50_000, 20_000, 10_000, 5_000, 2_000, 1_000, 500] as const;
+
+/**
+ * When `chunkSize` is set (Base/Arbitrum Sepolia), we must try that window **first**.
+ * Previously we merged it into DEFAULT and sorted descending, so 50_000 always ran first and
+ * defeated L2 tuning — nodes then error, timeout, or behave inconsistently vs Ethereum Sepolia.
+ */
+function buildLogChunkTrySizes(explicitMax?: number): number[] {
+  if (explicitMax == null || !Number.isFinite(explicitMax) || explicitMax < 1) {
+    return [...new Set(DEFAULT_LOG_CHUNK_SIZES_DESC)].sort((a, b) => b - a);
+  }
+  const cap = Math.min(Math.floor(explicitMax), 500_000);
+  const fromExplicit: number[] = [];
+  let c = cap;
+  while (c >= 500) {
+    if (!fromExplicit.includes(c)) fromExplicit.push(c);
+    c = Math.floor(c / 2);
+  }
+  if (!fromExplicit.includes(500)) fromExplicit.push(500);
+  const merged = [...fromExplicit, ...DEFAULT_LOG_CHUNK_SIZES_DESC];
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const n of merged) {
+    const v = Math.max(1, Math.floor(n));
+    if (seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
+  return out;
+}
+
+/**
  * Fetch logs in block chunks. Retries with smaller chunks when the RPC rejects wide
  * ranges (common on Base Sepolia and other L2 public endpoints).
  */
@@ -48,8 +84,7 @@ async function getLogsChunked(params: {
   topics: (string | string[] | null)[];
   chunkSize?: number;
 }) {
-  const sizes = [params.chunkSize ?? 50_000, 50_000, 20_000, 10_000, 5_000, 2_000, 1_000, 500];
-  const trySizes = [...new Set(sizes)].sort((a, b) => b - a);
+  const trySizes = buildLogChunkTrySizes(params.chunkSize);
   const out: ethers.Log[] = [];
   let start = params.fromBlock;
   while (start <= params.toBlock) {
@@ -134,19 +169,40 @@ export async function scanShieldedNotes(params: {
   fromBlock: number;
   viewingPriv: bigint;
   viewingPub: `0x${string}`;
+  /**
+   * First `eth_getLogs` window size (smaller helps Base/Arbitrum Sepolia public RPCs).
+   * Extension defaults to 50k; L2 endpoints often cap ranges tighter — callers may pass ~2000–10000.
+   */
+  logChunkSize?: number;
+  /** When `NEXT_PUBLIC_SHIELDED_SCAN_DEBUG` is set, labels this RPC attempt in console output. */
+  debugRpcLabel?: string;
 }) {
   const iface = new ethers.Interface(POOL_ABI);
   const event = iface.getEvent("RoutedCommitment");
   if (!event) return {notes: [] as DecryptedNote[], stats: {channel: ethers.ZeroHash as `0x${string}`, latestBlock: 0, totalLogs: 0, decryptSuccess: 0}};
   const topic = event.topicHash;
+  /** Matches `shieldDeposit` / pool: `keccak256(viewingPub)` — chain id is not mixed in. */
   const channel = ethers.keccak256(params.viewingPub);
   const latestBlock = await params.provider.getBlockNumber();
+  if (params.fromBlock > latestBlock) {
+    console.warn("[shielded-scan] no log query: fromBlock > chain head (wrong pool deploy block, wrong RPC chain, or stale head)", {
+      pool: params.poolAddress,
+      fromBlock: params.fromBlock,
+      latestBlock,
+      rpc: params.debugRpcLabel ?? "(unknown)",
+    });
+    return {
+      notes: [] as DecryptedNote[],
+      stats: {channel: channel as `0x${string}`, latestBlock, totalLogs: 0, decryptSuccess: 0},
+    };
+  }
   const logs = await getLogsChunked({
     provider: params.provider,
     address: params.poolAddress,
     fromBlock: params.fromBlock,
     toBlock: latestBlock,
     topics: [topic, channel],
+    chunkSize: params.logChunkSize,
   });
   const notes: DecryptedNote[] = [];
   let decryptSuccess = 0;
@@ -158,6 +214,29 @@ export async function scanShieldedNotes(params: {
     if (!note) continue;
     decryptSuccess += 1;
     notes.push({commitment: note.commitment, amount: BigInt(note.amount), blinding: note.blinding, token: note.token, txHash: log.transactionHash as `0x${string}`});
+  }
+  if (shieldedScanDebugEnabled()) {
+    let chainId: number | null = null;
+    try {
+      const net = await params.provider.getNetwork();
+      chainId = Number(net.chainId);
+    } catch {
+      /* ignore */
+    }
+    shieldedScanDebug("scanShieldedNotes", {
+      rpc: params.debugRpcLabel ?? "(unknown)",
+      chainId,
+      pool: params.poolAddress,
+      fromBlock: params.fromBlock,
+      toBlock: latestBlock,
+      logChunkSize: params.logChunkSize ?? null,
+      routedTopic0: topic,
+      channelTopic1: channel,
+      viewingPubPrefix: `${params.viewingPub.slice(0, 12)}…`,
+      totalLogs: logs.length,
+      decryptSuccess,
+      logsButNoDecrypt: logs.length > 0 && decryptSuccess === 0,
+    });
   }
   return {notes, stats: {channel: channel as `0x${string}`, latestBlock, totalLogs: logs.length, decryptSuccess}};
 }

@@ -33,6 +33,32 @@ async function ethGetLogsRange(
   }
 }
 
+const DEFAULT_LOG_CHUNK_SIZES_DESC = [50_000, 20_000, 10_000, 5_000, 2_000, 1_000, 500] as const;
+
+function buildLogChunkTrySizes(explicitMax?: number): number[] {
+  if (explicitMax == null || !Number.isFinite(explicitMax) || explicitMax < 1) {
+    return [...new Set(DEFAULT_LOG_CHUNK_SIZES_DESC)].sort((a, b) => b - a);
+  }
+  const cap = Math.min(Math.floor(explicitMax), 500_000);
+  const fromExplicit: number[] = [];
+  let c = cap;
+  while (c >= 500) {
+    if (!fromExplicit.includes(c)) fromExplicit.push(c);
+    c = Math.floor(c / 2);
+  }
+  if (!fromExplicit.includes(500)) fromExplicit.push(500);
+  const merged = [...fromExplicit, ...DEFAULT_LOG_CHUNK_SIZES_DESC];
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const n of merged) {
+    const v = Math.max(1, Math.floor(n));
+    if (seen.has(v)) continue;
+    seen.add(v);
+    out.push(v);
+  }
+  return out;
+}
+
 async function getLogsChunked(params: {
   provider: ethers.JsonRpcProvider;
   address: `0x${string}`;
@@ -41,8 +67,7 @@ async function getLogsChunked(params: {
   topics: (string | string[] | null)[];
   chunkSize?: number;
 }) {
-  const sizes = [params.chunkSize ?? 50_000, 50_000, 20_000, 10_000, 5_000, 2_000, 1_000, 500];
-  const trySizes = [...new Set(sizes)].sort((a, b) => b - a);
+  const trySizes = buildLogChunkTrySizes(params.chunkSize);
   const out: ethers.Log[] = [];
   let start = params.fromBlock;
   while (start <= params.toBlock) {

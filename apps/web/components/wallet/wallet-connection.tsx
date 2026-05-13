@@ -8,7 +8,7 @@ import {getActiveInjectedProvider, listInjectedProviders, setActiveInjectedProvi
 import {getShieldedNetwork} from "@/lib/networks";
 import {useHasMounted} from "@/lib/use-has-mounted";
 import {shortenHash} from "@/lib/utils";
-import {baseSepolia, mainnet, sepolia} from "wagmi/chains";
+import {arbitrumSepolia, baseSepolia, mainnet, sepolia} from "wagmi/chains";
 import {useShieldedStore} from "@/store/use-shielded-store";
 
 export function WalletConnection() {
@@ -28,9 +28,12 @@ export function WalletConnection() {
       : chainId === sepolia.id
         ? "Sepolia"
         : chainId === baseSepolia.id
-          ? "Base Sepolia"
-          : `Chain ${chainId}`;
-  const supportedChain = chainId === mainnet.id || chainId === sepolia.id || chainId === baseSepolia.id;
+        ? "Base Sepolia"
+      : chainId === arbitrumSepolia.id
+        ? "Arbitrum Sepolia"
+        : `Chain ${chainId}`;
+  const supportedChain =
+    chainId === mainnet.id || chainId === sepolia.id || chainId === baseSepolia.id || chainId === arbitrumSepolia.id;
   const poolNet = getShieldedNetwork(shieldedRpcChainId);
   const walletMatchesPool = chainId != null && chainId === shieldedRpcChainId;
   const availableConnectors = useMemo(() => {

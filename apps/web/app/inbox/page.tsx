@@ -5,13 +5,14 @@ import {EmptyState} from "@/components/ui/empty-state";
 import {HashDisplay} from "@/components/ui/hash-display";
 import {PageShell} from "@/components/layout/page-shell";
 import {SegmentedControl} from "@/components/ui/segmented-control";
+import {usePoolScopedNotes} from "@/hooks/use-pool-scoped-notes";
 import {useShieldedStore} from "@/store/use-shielded-store";
 import {formatAmount, relativeTime} from "@/lib/utils";
 
 type Filter = "all" | "unspent" | "spent";
 
 export default function InboxPage() {
-  const notes = useShieldedStore((state) => state.notes);
+  const {notes} = usePoolScopedNotes();
   const lastSyncedBlock = useShieldedStore((state) => state.lastSyncedBlock);
   const [filter, setFilter] = useState<Filter>("all");
   const [expanded, setExpanded] = useState<string | null>(null);

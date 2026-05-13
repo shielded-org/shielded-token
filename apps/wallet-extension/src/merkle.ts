@@ -74,10 +74,11 @@ export async function loadAllLeaves(
   const topic = event.topicHash;
   const latest = await provider.getBlockNumber();
   const logs: ethers.Log[] = [];
-  const chunkSize = 50_000;
+  /** Many public RPCs (e.g. Base Sepolia) reject `eth_getLogs` spans over ~2000 blocks (-32602). */
+  const chunkBlocks = 2000;
   let start = fromBlock;
   while (start <= latest) {
-    const end = Math.min(start + chunkSize - 1, latest);
+    const end = Math.min(start + chunkBlocks - 1, latest);
     const part = await provider.getLogs({
       address: merkleTreeAddress,
       fromBlock: start,

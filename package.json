@@ -20,10 +20,11 @@
     "test:contracts": "cd packages/contracts && forge test",
     "build:contracts": "cd packages/contracts && forge build",
     "deploy:pool:base-sepolia": "node scripts/base-sepolia-pool-deploy.mjs",
+    "deploy:pool:arbitrum-sepolia": "node scripts/arbitrum-sepolia-pool-deploy.mjs",
     "deploy:mock-tokens-batch": "node scripts/deploy-mock-erc20-batch.mjs",
     "mint:mock-tokens-batch": "MINT_ONLY=1 node scripts/deploy-mock-erc20-batch.mjs",
     "build:circuits": "cd packages/circuits && nargo compile",
-    "test:relayer-smoke": "node services/relayer/test/smoke.mjs",
+    "probe:arbitrum-rpc": "node scripts/probe-arbitrum-sepolia-rpc.mjs",
     "check": "npm run check:sdk && npm run lint:web && npm run build:web"
   },
   "dependencies": {

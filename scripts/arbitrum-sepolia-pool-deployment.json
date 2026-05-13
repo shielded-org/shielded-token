@@ -1,0 +1,14 @@
+{
+  "testnet": "arbitrum-sepolia",
+  "chainId": 421614,
+  "rpcUrl": "https://sepolia-rollup.arbitrum.io/rpc",
+  "blockExplorer": "https://sepolia.arbiscan.io",
+  "poseidon": "0xAAe87a37cFb56a5E81D0D2587956b7Bc9d1bFA83",
+  "poseidonHasher": "0xDb16E79C2321fA4fE89127E7a654d13f5A6D9df8",
+  "verifier": "0xB7D117E9127494EeF11D274A316584973E6Ec684",
+  "merkleTree": "0xEC71805247833595B77eF444D4e9EF95FFFB0fD5",
+  "pool": "0x3AD3c6ffE9323A58bcf4ADF3E091E07eC6570976",
+  "token": "0x5056ecfD57e1a5D5b9CE15383cD3655fA434f8be",
+  "poolDeployBlock": 267768393,
+  "deployedAt": "2026-05-12T18:55:54.612Z"
+}

@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import {Eye, EyeOff, NotebookTabs, TrendingUp, Wallet2} from "lucide-react";
+import {Eye, EyeOff, Loader2, NotebookTabs, TrendingUp, Wallet2} from "lucide-react";
 import {useMemo} from "react";
 import {PageShell} from "@/components/layout/page-shell";
 import {HashDisplay} from "@/components/ui/hash-display";
 import {MetricCard} from "@/components/ui/metric-card";
 import {StatusBadge} from "@/components/ui/status-badge";
+import {usePoolScopedNotes} from "@/hooks/use-pool-scoped-notes";
 import {tokenOptionsForShieldedPool} from "@/lib/networks";
 import {useHasMounted} from "@/lib/use-has-mounted";
 import {encodeShieldedAddress} from "@/lib/shielded-address";
@@ -15,6 +16,7 @@ import {
   formatUsd,
   getShieldedBalance,
   getTokenTotal,
+  noteMatchesTokenOption,
   relativeTime,
   sortTransactions,
 } from "@/lib/utils";
@@ -25,12 +27,12 @@ export default function DashboardPage() {
   const walletAddress = useShieldedStore((state) => state.walletAddress);
   const ownerPk = useShieldedStore((state) => state.ownerPk);
   const viewingPub = useShieldedStore((state) => state.viewingPub);
-  const notes = useShieldedStore((state) => state.notes);
+  const {notes, shieldedRpcChainId} = usePoolScopedNotes();
   const availableTokens = useShieldedStore((state) => state.tokens);
   const revealBalances = useShieldedStore((state) => state.revealBalances);
   const setRevealBalances = useShieldedStore((state) => state.setRevealBalances);
+  const shieldedBalanceLoading = useShieldedStore((state) => state.shieldedBalanceLoading);
   const transactions = useShieldedStore((state) => state.transactions);
-  const shieldedRpcChainId = useShieldedStore((state) => state.shieldedRpcChainId);
   const tokenOptions = useMemo(
     () => tokenOptionsForShieldedPool(shieldedRpcChainId, availableTokens),
     [shieldedRpcChainId, availableTokens]
@@ -64,13 +66,29 @@ export default function DashboardPage() {
               {isConnected ? (
                 <>
                   <div className="mt-5 flex items-center gap-3">
-                    <h2 className="font-mono text-5xl text-[#111827] sm:text-6xl">
-                      $ {revealBalances ? formatAmount(totalBalance) : "••••••"}
-                    </h2>
+                    {shieldedBalanceLoading ? (
+                      <div
+                        className="flex min-h-14 flex-col justify-center gap-2 sm:min-h-16"
+                        role="status"
+                        aria-live="polite"
+                        aria-busy="true"
+                      >
+                        <span className="inline-flex items-center gap-2.5 font-mono text-2xl text-[#6b7280] sm:text-3xl">
+                          <Loader2 className="size-8 shrink-0 animate-spin text-[#4f46e5] sm:size-9" aria-hidden />
+                          Syncing balance…
+                        </span>
+                        <span className="text-xs text-[#9ca3af]">Resolving notes on the selected pool network</span>
+                      </div>
+                    ) : (
+                      <h2 className="font-mono text-5xl text-[#111827] sm:text-6xl">
+                        $ {revealBalances ? formatAmount(totalBalance) : "••••••"}
+                      </h2>
+                    )}
                     <button
                       type="button"
                       onClick={() => setRevealBalances(!revealBalances)}
-                      className="inline-flex size-11 items-center justify-center rounded-full border border-[#d1d5db] bg-white text-[#6b7280] hover:-translate-y-0.5 hover:border-[#a5b4fc] hover:text-[#4f46e5]"
+                      disabled={shieldedBalanceLoading}
+                      className="inline-flex size-11 items-center justify-center rounded-full border border-[#d1d5db] bg-white text-[#6b7280] hover:-translate-y-0.5 hover:border-[#a5b4fc] hover:text-[#4f46e5] disabled:pointer-events-none disabled:opacity-40"
                     >
                       {revealBalances ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                     </button>
@@ -149,8 +167,8 @@ export default function DashboardPage() {
             </div>
             <div className="mt-6 grid gap-3">
               {tokenOptions.map((token) => {
-                const tokenNotes = notes.filter((note) => note.token === token.symbol);
-                const tokenTotal = getTokenTotal(notes, token.symbol);
+                const tokenNotes = notes.filter((note) => noteMatchesTokenOption(note, token));
+                const tokenTotal = getTokenTotal(notes, token);
                 return (
                   <article
                     key={token.symbol}

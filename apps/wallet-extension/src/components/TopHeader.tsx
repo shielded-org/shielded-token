@@ -1,6 +1,6 @@
 import {useEffect, useRef, useState} from "react";
 import {Check, ChevronDown, Menu} from "lucide-react";
-import {CHAIN_ID_BASE_SEPOLIA, CHAIN_ID_ETH_SEPOLIA, type ShieldedNetwork} from "../networks";
+import {CHAIN_ID_ARBITRUM_SEPOLIA, CHAIN_ID_BASE_SEPOLIA, CHAIN_ID_ETH_SEPOLIA, type ShieldedNetwork} from "../networks";
 
 type Props = {
   onOpenMenu: () => void;
@@ -16,12 +16,14 @@ type Props = {
 function networkPillTitle(net: ShieldedNetwork) {
   if (net.id === CHAIN_ID_ETH_SEPOLIA) return "Sepolia";
   if (net.id === CHAIN_ID_BASE_SEPOLIA) return "Base Sepolia";
+  if (net.id === CHAIN_ID_ARBITRUM_SEPOLIA) return "Arb Sepolia";
   return net.label;
 }
 
 function networkMenuSubtitle(net: ShieldedNetwork) {
   if (net.id === CHAIN_ID_ETH_SEPOLIA) return "Ethereum Sepolia testnet";
   if (net.id === CHAIN_ID_BASE_SEPOLIA) return "Base Sepolia testnet";
+  if (net.id === CHAIN_ID_ARBITRUM_SEPOLIA) return "Arbitrum Sepolia testnet";
   return net.label;
 }
 

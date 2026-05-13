@@ -14,6 +14,7 @@ import {getShieldedNetwork, tokenOptionsForShieldedPool} from "@/lib/networks";
 import {formatWalletBroadcastError, fetchShieldedNetworkErc20BalanceRaw} from "@/lib/rpc-read";
 import {shieldDeposit} from "@/lib/shielded-integration";
 import {getBrowserSigner} from "@/lib/web3";
+import {toast} from "@/lib/toast";
 import {copyText, formatAmount, getAmountValidationMessage, nowIso} from "@/lib/utils";
 import {useShieldedStore} from "@/store/use-shielded-store";
 
@@ -122,6 +123,8 @@ export default function ShieldPage() {
       addNote({
         id: noteId,
         token,
+        shieldedChainId: shieldedRpcChainId,
+        tokenContractAddress: ethers.getAddress(tokenMeta.contractAddress) as `0x${string}`,
         amount: Number(amount || 0).toFixed(6),
         status: "unspent",
         commitment: result.commitment,
@@ -142,9 +145,12 @@ export default function ShieldPage() {
       setSuccessNote(result.encryptedNote);
       setSuccessTxHash(result.txHash);
       setBalanceTick((n) => n + 1);
+      toast.success(`Shield deposit confirmed: ${formatAmount(amount)} ${token}. Your new private note is ready to scan.`);
     } catch (err) {
-      if (net) setSubmitError(formatWalletBroadcastError(err, net));
-      else setSubmitError(err instanceof Error ? err.message : String(err));
+      const msg = net ? formatWalletBroadcastError(err, net) : err instanceof Error ? err.message : String(err);
+      console.error("[shield] deposit failed:", err);
+      setSubmitError(msg);
+      toast.error(msg.length > 420 ? `${msg.slice(0, 420)}…` : msg);
     } finally {
       setSubmitting(false);
     }
