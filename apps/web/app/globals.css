@@ -158,17 +158,20 @@ textarea {
   }
 }
 
-@keyframes toast-host-enter {
-  from {
-    opacity: 0;
-    transform: translateX(12px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
+/* react-toastify: avoid inner scrollbars on stacked toasts */
+.zk-toastify-root.Toastify__toast-container,
+.Toastify__toast-container {
+  max-height: none !important;
+  overflow: visible !important;
+  overflow-y: visible !important;
 }
 
-.toast-host-enter {
-  animation: toast-host-enter 0.35s ease-out both;
+.Toastify__toast {
+  border-radius: 0.875rem;
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.12);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+.Toastify__toast-body {
+  padding: 0;
 }
