@@ -1,23 +1,21 @@
-type ToastKind = "success" | "error" | "info";
+import {type ToastOptions, toast as toastify} from "react-toastify";
 
-type ToastPush = (kind: ToastKind, message: string, durationMs?: number) => void;
+const defaults: ToastOptions = {
+  position: "top-right",
+  closeOnClick: true,
+  pauseOnHover: true,
+  draggable: true,
+  hideProgressBar: true,
+};
 
-let pushRef: ToastPush | null = null;
-
-/** Wired by `ToastHost` in the app shell. Safe no-op before mount. */
-export function setToastPush(fn: ToastPush | null) {
-  pushRef = fn;
-}
-
-/** Lightweight stack toasts (toastify-style API, no extra dependency). */
 export const toast = {
   success(message: string, durationMs = 5500) {
-    pushRef?.("success", message, durationMs);
+    toastify.success(message, {...defaults, autoClose: durationMs});
   },
   error(message: string, durationMs = 10000) {
-    pushRef?.("error", message, durationMs);
+    toastify.error(message, {...defaults, autoClose: durationMs});
   },
   info(message: string, durationMs = 6000) {
-    pushRef?.("info", message, durationMs);
+    toastify.info(message, {...defaults, autoClose: durationMs});
   },
 };
