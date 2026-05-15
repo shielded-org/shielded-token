@@ -17,6 +17,7 @@ import {executePrivateTransfer, executeUnshield} from "./privateTransfer";
 import {scanShieldedNotes} from "./shielded";
 import type {DecryptedNote} from "./shielded";
 import {decodeShieldedAddress, encodeShieldedAddress} from "./shieldedAddress";
+import {l2GasLimitOverride, txFeeOverrides} from "./tx-gas";
 import {addVaultDerivedAccount, clearVault, listVaultAccountsMeta, readLastOpenedAccountId, readVaultMeta, readWalletMnemonic, setLastOpenedAccountId, storePrivateKey, unlockPrivateKey, unlockVaultAccount} from "./storage";
 import {Badge} from "./components/Badge";
 import {ActivityDetail} from "./components/ActivityDetail";
@@ -1032,7 +1033,9 @@ export default function App() {
       const secondChunk = amount - firstChunk;
       const chunks: bigint[] = [firstChunk, secondChunk];
 
-      const approveTx = await token.approve(CONTRACTS.pool, amount);
+      const approveGas = await l2GasLimitOverride(wallet, () => token.approve.estimateGas(CONTRACTS.pool, amount), "approve");
+      const feeApprove = await txFeeOverrides(provider);
+      const approveTx = await token.approve(CONTRACTS.pool, amount, {...feeApprove, ...(approveGas ?? {})});
       updateActivityEntry(pendingShieldId, {detail: "Approve submitted."});
       setStatus(`Approve submitted: ${approveTx.hash}`);
       await approveTx.wait();
@@ -1051,13 +1054,28 @@ export default function App() {
         };
         const encrypted = await encryptNoteECDH(note, viewingPub);
         const route = routeForRecipient(viewingPub, i);
+        const shieldGas = await l2GasLimitOverride(
+          wallet,
+          () =>
+            pool.shieldRouted.estimateGas(
+              resolvedSelectedToken,
+              chunkAmount,
+              toHex32(commitment),
+              encrypted,
+              route.channel,
+              route.subchannel
+            ),
+          "shield"
+        );
+        const feeShield = await txFeeOverrides(provider);
         const shieldTx = await pool.shieldRouted(
           resolvedSelectedToken,
           chunkAmount,
           toHex32(commitment),
           encrypted,
           route.channel,
-          route.subchannel
+          route.subchannel,
+          {...feeShield, ...(shieldGas ?? {})}
         );
         updateActivityEntry(pendingShieldId, {detail: `Shield chunk ${i + 1}/${chunks.length} submitted.`});
         setStatus(`Shield chunk ${i + 1}/${chunks.length} submitted: ${shieldTx.hash}`);
