@@ -16,6 +16,7 @@ import {deriveOwnerPk, deriveUserKeys, keySeedFromWalletSignature, viewingPrivTo
 import {scanShieldedNotes, type DecryptedNote} from "./shielded";
 import {shieldedScanDebug, shieldedScanDebugEnabled, shieldedScanRpcLabel} from "./shielded-scan-debug";
 import type {StoredDecryptedNote, TokenDefinition} from "./types";
+import {l2GasLimitOverride, txFeeOverrides} from "./tx-gas";
 import {tokenAddressFromNoteTokenField} from "./utils";
 
 function toHex32(v: bigint): `0x${string}` {
@@ -435,9 +436,34 @@ export async function shieldDeposit(params: {
   /** Same channel the indexer uses: `keccak256(viewingPub)` — not chain-specific. */
   const channel = ethers.keccak256(params.viewingPub);
   const subchannel = ethers.solidityPackedKeccak256(["bytes32", "uint64"], [channel, 0n]);
-  const approveTx = await token.approve(net.contracts.pool, params.amount);
+  const prov = params.signer.provider;
+  const feeOpts = prov ? await txFeeOverrides(prov) : {};
+  const approveGas = await l2GasLimitOverride(params.signer, () => token.approve.estimateGas(net.contracts.pool, params.amount), "approve");
+  const approveTx = await token.approve(net.contracts.pool, params.amount, {...feeOpts, ...(approveGas ?? {})});
   await approveTx.wait();
-  const shieldTx = await pool.shieldRouted(params.tokenAddress, params.amount, toHex32(commitment), envelope, channel, subchannel);
+  const feeOpts2 = prov ? await txFeeOverrides(prov) : {};
+  const shieldGas = await l2GasLimitOverride(
+    params.signer,
+    () =>
+      pool.shieldRouted.estimateGas(
+        params.tokenAddress,
+        params.amount,
+        toHex32(commitment),
+        envelope,
+        channel,
+        subchannel
+      ),
+    "shield"
+  );
+  const shieldTx = await pool.shieldRouted(
+    params.tokenAddress,
+    params.amount,
+    toHex32(commitment),
+    envelope,
+    channel,
+    subchannel,
+    {...feeOpts2, ...(shieldGas ?? {})}
+  );
   await shieldTx.wait();
   return {txHash: shieldTx.hash as `0x${string}`, commitment: toHex32(commitment), encryptedNote: envelope};
 }
