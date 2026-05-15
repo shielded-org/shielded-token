@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import {usePathname} from "next/navigation";
-import {AlertCircle, Building2, House, Info, Menu, Settings, TerminalSquare, X} from "lucide-react";
+import {AlertCircle, Building2, Droplets, House, Info, Menu, Settings, TerminalSquare, X} from "lucide-react";
 import {ethers} from "ethers";
 import {useCallback, useEffect, useRef, useState} from "react";
 import {WalletConnection} from "@/components/wallet/wallet-connection";
@@ -567,6 +567,16 @@ export function AppShell({children}: {children: React.ReactNode}) {
           </div>
           <div className="mt-8 space-y-2">
             <p className="px-2 text-xs font-semibold uppercase tracking-wide text-[#9ca3af]">Manage</p>
+            <Link
+              href="/faucet"
+              onClick={() => setMobileSidebarOpen(false)}
+              className={cn(
+                "flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm",
+                pathname === "/faucet" ? "bg-[#e5e7eb] text-[#111827]" : "text-[#4b5563] hover:bg-[#eef2f7]"
+              )}
+            >
+              <Droplets className="size-4" /> Faucet
+            </Link>
             <Link href="/settings" onClick={() => setMobileSidebarOpen(false)} className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-[#4b5563] hover:bg-[#eef2f7]">
               <Settings className="size-4" /> Settings
             </Link>
