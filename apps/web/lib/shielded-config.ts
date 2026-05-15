@@ -36,6 +36,9 @@ export const ERC20_ABI = [
   "function transfer(address to, uint256 amount) returns (bool)",
 ];
 
+/** Local `MockERC20` used on testnets for pool tokens and the primary pool token. */
+export const MOCK_ERC20_MINT_ABI = ["function mint(address to, uint256 amount) external"];
+
 export const POSEIDON_ABI = [
   "function hash_2(uint256 x, uint256 y) external pure returns (uint256)",
   "function hash(uint256[] input) external pure returns (uint256)",
