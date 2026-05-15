@@ -29,6 +29,33 @@ const confirmPollMs = Number(process.env.RELAYER_CONFIRM_POLL_MS || 2_000);
 /** Sepolia / many RPCs cap block gas target; raw tx gasLimit must stay under ~16.7M. */
 const defaultShieldedTransferGasLimit = Number(process.env.RELAYER_SHIELDED_TRANSFER_GAS_LIMIT || 16_000_000);
 
+const MAX_RELAY_GAS = 16_000_000n;
+const L2_RELAY_GAS = {
+  [CHAIN_ID_ARBITRUM_SEPOLIA]: {mulBps: 16000, floor: 6_000_000n},
+  [CHAIN_ID_BASE_SEPOLIA]: {mulBps: 14000, floor: 4_000_000n},
+};
+
+function relayL2AdjustedGasLimit(chainId, estimated) {
+  const cfg = L2_RELAY_GAS[chainId];
+  if (!cfg) return estimated > MAX_RELAY_GAS ? MAX_RELAY_GAS : estimated;
+  const bumped = (estimated * BigInt(cfg.mulBps)) / 10000n;
+  const v = bumped > cfg.floor ? bumped : cfg.floor;
+  return v > MAX_RELAY_GAS ? MAX_RELAY_GAS : v;
+}
+
+async function relayShieldedTxGasLimit(chainId, estimateFn, clientSuggested) {
+  const raw = clientSuggested ?? defaultShieldedTransferGasLimit;
+  const suggested = BigInt(typeof raw === "bigint" ? raw : String(raw));
+  const cfg = L2_RELAY_GAS[chainId];
+  if (!cfg) return suggested > MAX_RELAY_GAS ? MAX_RELAY_GAS : suggested;
+  try {
+    const est = await estimateFn();
+    return relayL2AdjustedGasLimit(chainId, est);
+  } catch {
+    return relayL2AdjustedGasLimit(chainId, cfg.floor);
+  }
+}
+
 const requests = new Map();
 
 /** @type {Map<number, import("ethers").NonceManager[]>} */
@@ -239,7 +266,7 @@ async function submitShieldedTransferOnchain(body) {
     const signer = pickRelayerSigner(chainId);
     if (!signer) break;
     const contract = new ethers.Contract(target, SHIELDED_TRANSFER_ABI, signer);
-    const sendShieldedTransfer = async () =>
+    const sendShieldedTransfer = async (gasLimit) =>
       await contract.shieldedTransferRouted(
         body.proof,
         body.nullifiers,
@@ -251,11 +278,25 @@ async function submitShieldedTransferOnchain(body) {
         body.token,
         BigInt(body.fee ?? 0),
         body.feeRecipientPk,
-        {gasLimit: body.gasLimit ?? defaultShieldedTransferGasLimit}
+        {gasLimit}
       );
 
     try {
-      const tx = await sendShieldedTransfer();
+      const gasLimit = await relayShieldedTxGasLimit(chainId, () =>
+        contract.shieldedTransferRouted.estimateGas(
+          body.proof,
+          body.nullifiers,
+          body.newCommitments,
+          body.encryptedNotes,
+          body.channels,
+          body.subchannels,
+          body.merkleRoot,
+          body.token,
+          BigInt(body.fee ?? 0),
+          body.feeRecipientPk
+        )
+      , body.gasLimit);
+      const tx = await sendShieldedTransfer(gasLimit);
       return {txHash: tx.hash, chainId};
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -263,7 +304,21 @@ async function submitShieldedTransferOnchain(body) {
       if (code === "NONCE_EXPIRED" || /nonce too low|nonce has already been used/i.test(message)) {
         signer.reset();
         try {
-          const tx = await sendShieldedTransfer();
+          const gasLimit = await relayShieldedTxGasLimit(chainId, () =>
+            contract.shieldedTransferRouted.estimateGas(
+              body.proof,
+              body.nullifiers,
+              body.newCommitments,
+              body.encryptedNotes,
+              body.channels,
+              body.subchannels,
+              body.merkleRoot,
+              body.token,
+              BigInt(body.fee ?? 0),
+              body.feeRecipientPk
+            )
+          , body.gasLimit);
+          const tx = await sendShieldedTransfer(gasLimit);
           return {txHash: tx.hash, chainId};
         } catch (retryError) {
           lastError = retryError;
@@ -300,6 +355,20 @@ async function submitUnshieldOnchain(body) {
     if (!signer) break;
     const contract = new ethers.Contract(target, UNSHIELD_ABI, signer);
     try {
+      const gasLimit = await relayShieldedTxGasLimit(chainId, () =>
+        contract.unshield.estimateGas(
+          body.proof,
+          body.nullifier,
+          body.token,
+          body.recipient,
+          BigInt(body.amount),
+          body.merkleRoot,
+          body.newCommitment ?? ethers.ZeroHash,
+          body.encryptedNote ?? "0x",
+          body.channel ?? ethers.ZeroHash,
+          body.subchannel ?? ethers.ZeroHash
+        )
+      , body.gasLimit);
       const tx = await contract.unshield(
         body.proof,
         body.nullifier,
@@ -311,7 +380,7 @@ async function submitUnshieldOnchain(body) {
         body.encryptedNote ?? "0x",
         body.channel ?? ethers.ZeroHash,
         body.subchannel ?? ethers.ZeroHash,
-        {gasLimit: body.gasLimit ?? defaultShieldedTransferGasLimit}
+        {gasLimit}
       );
       return {txHash: tx.hash, chainId};
     } catch (error) {
