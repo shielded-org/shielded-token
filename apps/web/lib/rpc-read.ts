@@ -27,7 +27,10 @@ export function reorderPremiumRpcsLast(urls: string[]): string[] {
   return [...head, ...tail];
 }
 
-/** Curated for `eth_getLogs` + reads; some mirrors return empty logs for the same filter. Order = try first. */
+/**
+ * Curated for `eth_getLogs` + reads; some mirrors return empty logs for the same filter.
+ * Premium URLs (Alchemy) are moved last — free tier caps log ranges to ~10 blocks; scans use that window per URL.
+ */
 const BASE_SEPOLIA_READ_RPC_FALLBACKS: readonly string[] = [
   "https://sepolia.base.org",
   // PublicNode before Tenderly: Tenderly’s public gateway often returns HTTP 429 under scan load.
