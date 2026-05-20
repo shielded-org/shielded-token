@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import {usePathname} from "next/navigation";
-import {AlertCircle, Building2, Droplets, House, Info, Menu, Settings, TerminalSquare, X} from "lucide-react";
+import {AlertCircle, Droplets, House, Info, Menu, Settings, Shield, TerminalSquare, X} from "lucide-react";
 import {ethers} from "ethers";
 import {useCallback, useEffect, useRef, useState} from "react";
 import {WalletConnection} from "@/components/wallet/wallet-connection";
@@ -516,37 +516,47 @@ export function AppShell({children}: {children: React.ReactNode}) {
   const shieldedNetworks = getShieldedNetworks();
 
   return (
-    <div className="min-h-screen bg-[#f3f4f6] text-[#111827]">
-      <div className="mx-auto flex min-h-screen w-full max-w-[1500px]">
+    <div className="app-theme">
+      <div className="app-blob app-blob-a" aria-hidden />
+      <div className="app-blob app-blob-b" aria-hidden />
+      <div className="app-shell-content mx-auto flex min-h-screen w-full max-w-[1500px]">
         {mobileSidebarOpen ? (
           <button
             type="button"
-            className="fixed inset-0 z-40 bg-[#111827]/35 lg:hidden"
+            className="fixed inset-0 z-40 bg-[var(--brand-fg)]/25 backdrop-blur-[2px] lg:hidden"
             aria-label="Close navigation menu"
             onClick={() => setMobileSidebarOpen(false)}
           />
         ) : null}
 
-        <aside className={cn(
-          "fixed inset-y-0 left-0 z-50 w-[250px] border-r border-[#e5e7eb] bg-[#f8fafc] px-4 py-5 transition-transform duration-200 lg:static lg:z-auto lg:translate-x-0",
-          mobileSidebarOpen ? "translate-x-0" : "-translate-x-full"
-        )}>
-          <div className="flex items-center gap-3 px-2">
-            <div className="flex size-8 items-center justify-center rounded-lg bg-[#111827] text-white">
-              <Building2 className="size-4" />
-            </div>
-            <p className="font-semibold text-[#111827]">Shielded</p>
+        <aside
+          className={cn(
+            "app-sidebar fixed inset-y-0 left-0 z-50 w-[250px] border-r px-4 py-5 backdrop-blur-md transition-transform duration-200 lg:static lg:z-auto lg:translate-x-0",
+            mobileSidebarOpen ? "translate-x-0" : "-translate-x-full"
+          )}
+        >
+          <div className="flex items-center gap-2 px-2">
+            <Link
+              href="/"
+              className="flex min-w-0 flex-1 items-center gap-3 rounded-xl py-1 transition hover:bg-[var(--brand-accent-soft)]"
+              onClick={() => setMobileSidebarOpen(false)}
+            >
+              <div className="app-logo-mark size-8 shrink-0">
+                <Shield className="size-4" strokeWidth={2} />
+              </div>
+              <p className="font-display font-semibold text-[var(--brand-fg)]">Shielded</p>
+            </Link>
             <button
               type="button"
               onClick={() => setMobileSidebarOpen(false)}
-              className="ml-auto inline-flex rounded-lg border border-[#e5e7eb] p-1.5 text-[#6b7280] lg:hidden"
+              className="app-btn-secondary inline-flex shrink-0 rounded-lg !h-auto !min-h-0 border p-1.5 !px-1.5 !py-1.5 shadow-none lg:hidden"
               aria-label="Close navigation"
             >
               <X className="size-4" />
             </button>
           </div>
           <div className="mt-8 space-y-2">
-            <p className="px-2 text-xs font-semibold uppercase tracking-wide text-[#9ca3af]">Company</p>
+            <p className="px-2 text-xs font-semibold uppercase tracking-wide text-[var(--brand-muted)]">Company</p>
             {NAV_ITEMS.map((item) => {
               const active = pathname === item.href;
               return (
@@ -554,10 +564,7 @@ export function AppShell({children}: {children: React.ReactNode}) {
                   key={item.href}
                   href={item.href}
                   onClick={() => setMobileSidebarOpen(false)}
-                  className={cn(
-                    "flex items-center gap-2 rounded-xl px-3 py-2 text-sm",
-                    active ? "bg-[#e5e7eb] text-[#111827]" : "text-[#4b5563] hover:bg-[#eef2f7]"
-                  )}
+                  className={cn("app-nav-link", active && "app-nav-link-active")}
                 >
                   <TerminalSquare className="size-4" />
                   {item.label}
@@ -566,18 +573,19 @@ export function AppShell({children}: {children: React.ReactNode}) {
             })}
           </div>
           <div className="mt-8 space-y-2">
-            <p className="px-2 text-xs font-semibold uppercase tracking-wide text-[#9ca3af]">Manage</p>
+            <p className="px-2 text-xs font-semibold uppercase tracking-wide text-[var(--brand-muted)]">Manage</p>
             <Link
               href="/faucet"
               onClick={() => setMobileSidebarOpen(false)}
-              className={cn(
-                "flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm",
-                pathname === "/faucet" ? "bg-[#e5e7eb] text-[#111827]" : "text-[#4b5563] hover:bg-[#eef2f7]"
-              )}
+              className={cn("app-nav-link w-full", pathname === "/faucet" && "app-nav-link-active")}
             >
               <Droplets className="size-4" /> Faucet
             </Link>
-            <Link href="/settings" onClick={() => setMobileSidebarOpen(false)} className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-[#4b5563] hover:bg-[#eef2f7]">
+            <Link
+              href="/settings"
+              onClick={() => setMobileSidebarOpen(false)}
+              className={cn("app-nav-link w-full", pathname === "/settings" && "app-nav-link-active")}
+            >
               <Settings className="size-4" /> Settings
             </Link>
           </div>
@@ -586,26 +594,28 @@ export function AppShell({children}: {children: React.ReactNode}) {
         <div className="flex flex-1 flex-col px-3 py-3 sm:px-4 lg:px-6 lg:py-4">
           <header className="surface-panel rounded-2xl px-5 py-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              <nav className="flex items-center gap-5 text-sm text-[#4b5563]">
+              <nav className="flex items-center gap-5 text-sm text-[var(--brand-muted)]">
                 <button
                   type="button"
                   onClick={() => setMobileSidebarOpen(true)}
-                  className="inline-flex rounded-lg border border-[#e5e7eb] p-1.5 text-[#6b7280] lg:hidden"
+                  className="app-btn-secondary inline-flex rounded-lg !h-auto border p-1.5 !px-1.5 !py-1.5 shadow-none lg:hidden"
                   aria-label="Open navigation"
                 >
                   <Menu className="size-4" />
                 </button>
-                <span className="inline-flex items-center gap-1.5 font-medium text-[#111827]"><House className="size-4" /> Home</span>
-                <span className="inline-flex items-center gap-1 rounded-full border border-[#e5e7eb] bg-[#f9fafb] px-2.5 py-1 text-xs text-[#6b7280]">
-                  Synced to block {lastSyncedBlock.toLocaleString()}
+                <span className="inline-flex items-center gap-1.5 font-medium text-[var(--brand-fg)]">
+                  <House className="size-4 text-[var(--brand-accent)]" /> Home
+                </span>
+                <span className="app-badge-sync inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs">
+                  Synced to block <strong>{lastSyncedBlock.toLocaleString()}</strong>
                 </span>
               </nav>
               <div className="flex flex-wrap items-center justify-end gap-2">
                 {shieldedNetworks.length > 1 ? (
-                  <label className="flex items-center gap-2 text-xs text-[#6b7280]">
+                  <label className="flex items-center gap-2 text-xs text-[var(--brand-muted)]">
                     <span className="whitespace-nowrap">Pool network</span>
                     <select
-                      className="rounded-lg border border-[#e5e7eb] bg-white px-2 py-1.5 text-xs text-[#111827]"
+                      className="app-select px-2 py-1.5 text-xs"
                       value={shieldedRpcChainId}
                       onChange={(e) => onPoolNetworkChange(Number(e.target.value) as ShieldedChainId)}
                     >
