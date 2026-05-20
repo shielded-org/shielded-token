@@ -10,6 +10,7 @@ import {
   type ShieldedNetwork,
 } from "./networks";
 import {runAlchemyJsonRpcSerialized} from "./premium-rpc-queue";
+import {recommendedLogChunkSizeForRpc} from "./eth-get-logs";
 import {getReadRpcUrlCandidates, getWorkingReadProvider} from "./rpc-read";
 import {ERC20_ABI, POOL_ABI, POSEIDON_ABI} from "./shielded-config";
 import {deriveOwnerPk, deriveUserKeys, keySeedFromWalletSignature, viewingPrivToPub, SHIELD_KEY_DERIVATION_CONSENT_MESSAGE} from "./keys";
@@ -66,10 +67,10 @@ function mergeDecryptedNotesDedupe(carry: DecryptedNote[], fresh: DecryptedNote[
   return Array.from(m.values());
 }
 
-/** Smaller first window — matches wallet-extension chunk intent on L2 public RPCs that cap log ranges. */
-function defaultLogChunkSize(net: ShieldedNetwork): number | undefined {
-  if (net.id === CHAIN_ID_BASE_SEPOLIA || net.id === CHAIN_ID_ARBITRUM_SEPOLIA) return 2000;
-  return undefined;
+const L2_CHAIN_IDS = [CHAIN_ID_BASE_SEPOLIA, CHAIN_ID_ARBITRUM_SEPOLIA] as const;
+
+function logChunkSizeForRpc(net: ShieldedNetwork, rpcUrl: string): number | undefined {
+  return recommendedLogChunkSizeForRpc(net.id, rpcUrl, L2_CHAIN_IDS);
 }
 
 /**
@@ -92,7 +93,6 @@ export async function scanShieldedNotesWithRpcFallback(
   }
 ) {
   const urls = getReadRpcUrlCandidates(net);
-  const logChunkSize = defaultLogChunkSize(net);
   const mergeMultiRpc = net.id === CHAIN_ID_BASE_SEPOLIA || net.id === CHAIN_ID_ARBITRUM_SEPOLIA;
 
   if (shieldedScanDebugEnabled()) {
@@ -104,7 +104,7 @@ export async function scanShieldedNotesWithRpcFallback(
       viewingPubPrefix: `${scanArgs.viewingPub.slice(0, 12)}…`,
       mergeMultiRpc,
       rpcCandidatesOrdered: urls.map(shieldedScanRpcLabel),
-      logChunkSize: logChunkSize ?? null,
+      logChunkSizes: urls.map((u) => logChunkSizeForRpc(net, u) ?? null),
     });
   }
 
@@ -118,7 +118,7 @@ export async function scanShieldedNotesWithRpcFallback(
           return scanShieldedNotes({
             provider,
             ...scanArgs,
-            logChunkSize,
+            logChunkSize: logChunkSizeForRpc(net, url),
             debugRpcLabel: shieldedScanRpcLabel(url),
           });
         });
@@ -153,7 +153,7 @@ export async function scanShieldedNotesWithRpcFallback(
         return scanShieldedNotes({
           provider,
           ...scanArgs,
-          logChunkSize,
+          logChunkSize: logChunkSizeForRpc(net, url),
           debugRpcLabel: shieldedScanRpcLabel(url),
         });
       });
@@ -165,7 +165,7 @@ export async function scanShieldedNotesWithRpcFallback(
       }
       const fullDecrypt =
         res.stats.totalLogs > 0 && res.stats.decryptSuccess === res.stats.totalLogs;
-      if (fullDecrypt) {
+      if (fullDecrypt || res.notes.length > 0) {
         if (shieldedScanDebugEnabled()) {
           shieldedScanDebug("scanShieldedNotesWithRpcFallback:shortCircuit", {
             shieldedChainId: net.id,
@@ -173,7 +173,10 @@ export async function scanShieldedNotesWithRpcFallback(
             rpc: shieldedScanRpcLabel(url),
             rpcIndex: i,
             totalLogs: res.stats.totalLogs,
-            reason: "All logs decrypted on this mirror; skipping remaining RPCs to save quota.",
+            decryptedNotes: res.notes.length,
+            reason: fullDecrypt
+              ? "All logs decrypted on this mirror; skipping remaining RPCs."
+              : "Found decryptable notes on this mirror; skipping remaining RPCs (avoids duplicate full-history scans).",
           });
         }
         break;
