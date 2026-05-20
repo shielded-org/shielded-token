@@ -24,7 +24,7 @@ export function HashDisplay({value, className}: HashDisplayProps) {
       type="button"
       onClick={handleCopy}
       className={cn(
-        "group inline-flex items-center gap-2 rounded-full border border-[#e5e7eb] bg-white px-3 py-1.5 font-mono text-xs text-[#374151] transition hover:-translate-y-0.5 hover:border-[#a5b4fc] hover:bg-[#f8fafc]",
+        "group inline-flex items-center gap-2 rounded-full border border-[var(--brand-border)] bg-[var(--brand-surface)] px-3 py-1.5 font-mono text-xs text-[var(--brand-fg)] transition hover:-translate-y-0.5 hover:border-[var(--brand-accent)]/40 hover:bg-[var(--brand-accent-soft)] hover:text-[var(--brand-accent)]",
         className
       )}
       title={value}
