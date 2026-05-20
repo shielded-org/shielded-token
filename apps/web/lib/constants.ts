@@ -63,7 +63,7 @@ export const PROOF_STEP_LABELS = {
 } as const;
 
 export const NAV_ITEMS = [
-  {href: "/", label: "Dashboard"},
+  {href: "/dashboard", label: "Dashboard"},
   {href: "/shield", label: "Deposit"},
   {href: "/transfer", label: "Transfer Privately"},
   {href: "/unshield", label: "Withdraw"},

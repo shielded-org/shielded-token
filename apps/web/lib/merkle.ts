@@ -1,4 +1,10 @@
 import {ethers} from "ethers";
+import {
+  ARBITRUM_SEPOLIA_PUBLIC_LOG_CHUNK,
+  BASE_SEPOLIA_PUBLIC_LOG_CHUNK,
+  getLogsChunked,
+} from "./eth-get-logs";
+import {CHAIN_ID_ARBITRUM_SEPOLIA} from "./networks";
 import {MERKLE_ABI, POSEIDON_ABI} from "./shielded-config";
 
 function toHex32(v: bigint): `0x${string}` {
@@ -72,16 +78,19 @@ export async function loadAllLeaves(
   if (!event) return [];
   const topic = event.topicHash;
   const latest = await provider.getBlockNumber();
-  const logs: ethers.Log[] = [];
-  /** Many public RPCs (e.g. Base Sepolia) reject `eth_getLogs` spans over ~2000 blocks (-32602). */
-  const chunkBlocks = 2000;
-  let start = fromBlock;
-  while (start <= latest) {
-    const end = Math.min(start + chunkBlocks - 1, latest);
-    const part = await provider.getLogs({address: merkleTreeAddress, fromBlock: start, toBlock: end, topics: [topic]});
-    logs.push(...part);
-    start = end + 1;
-  }
+  const nw = await provider.getNetwork();
+  const logChunkSize =
+    Number(nw.chainId) === CHAIN_ID_ARBITRUM_SEPOLIA
+      ? ARBITRUM_SEPOLIA_PUBLIC_LOG_CHUNK
+      : BASE_SEPOLIA_PUBLIC_LOG_CHUNK;
+  const logs = await getLogsChunked({
+    provider,
+    address: merkleTreeAddress,
+    fromBlock,
+    toBlock: latest,
+    topics: [topic],
+    chunkSize: logChunkSize,
+  });
   const leaves: `0x${string}`[] = [];
   for (const log of logs) {
     const parsed = iface.parseLog(log);

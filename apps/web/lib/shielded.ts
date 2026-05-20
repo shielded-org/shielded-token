@@ -1,4 +1,5 @@
 import {ethers} from "ethers";
+import {getLogsChunked} from "./eth-get-logs";
 import {POOL_ABI} from "./shielded-config";
 import {shieldedScanDebug, shieldedScanDebugEnabled} from "./shielded-scan-debug";
 
@@ -12,108 +13,6 @@ export type DecryptedNote = {
 
 function toHex32(v: bigint): `0x${string}` {
   return ethers.zeroPadValue(ethers.toBeHex(v), 32) as `0x${string}`;
-}
-
-/**
- * Inclusive block range. Bisects on failure so transient / range errors never drop logs
- * from earlier sub-ranges (a later failing chunk must not discard a successful one).
- */
-async function ethGetLogsRange(
-  provider: ethers.JsonRpcProvider,
-  address: `0x${string}`,
-  topics: (string | string[] | null)[],
-  fromBlock: number,
-  toBlock: number
-): Promise<ethers.Log[]> {
-  if (fromBlock > toBlock) return [];
-  try {
-    return await provider.getLogs({address, fromBlock, toBlock, topics});
-  } catch (e) {
-    if (fromBlock === toBlock) throw e;
-    const mid = Math.floor((fromBlock + toBlock) / 2);
-    const left = await ethGetLogsRange(provider, address, topics, fromBlock, mid);
-    const right = await ethGetLogsRange(provider, address, topics, mid + 1, toBlock);
-    return [...left, ...right];
-  }
-}
-
-/**
- * Block windows to try for `eth_getLogs` when the caller does not pin a preferred max span.
- * Descending: try a wide range first, shrink on RPC errors (typical L1 public nodes).
- */
-const DEFAULT_LOG_CHUNK_SIZES_DESC = [50_000, 20_000, 10_000, 5_000, 2_000, 1_000, 500] as const;
-
-/**
- * When `chunkSize` is set (Base/Arbitrum Sepolia), we must try that window **first**.
- * Previously we merged it into DEFAULT and sorted descending, so 50_000 always ran first and
- * defeated L2 tuning — nodes then error, timeout, or behave inconsistently vs Ethereum Sepolia.
- */
-function buildLogChunkTrySizes(explicitMax?: number): number[] {
-  if (explicitMax == null || !Number.isFinite(explicitMax) || explicitMax < 1) {
-    return [...new Set(DEFAULT_LOG_CHUNK_SIZES_DESC)].sort((a, b) => b - a);
-  }
-  const cap = Math.min(Math.floor(explicitMax), 500_000);
-  const fromExplicit: number[] = [];
-  let c = cap;
-  while (c >= 500) {
-    if (!fromExplicit.includes(c)) fromExplicit.push(c);
-    c = Math.floor(c / 2);
-  }
-  if (!fromExplicit.includes(500)) fromExplicit.push(500);
-  const merged = [...fromExplicit, ...DEFAULT_LOG_CHUNK_SIZES_DESC];
-  const seen = new Set<number>();
-  const out: number[] = [];
-  for (const n of merged) {
-    const v = Math.max(1, Math.floor(n));
-    if (seen.has(v)) continue;
-    seen.add(v);
-    out.push(v);
-  }
-  return out;
-}
-
-/**
- * Fetch logs in block chunks. Retries with smaller chunks when the RPC rejects wide
- * ranges (common on Base Sepolia and other L2 public endpoints).
- */
-async function getLogsChunked(params: {
-  provider: ethers.JsonRpcProvider;
-  address: `0x${string}`;
-  fromBlock: number;
-  toBlock: number;
-  topics: (string | string[] | null)[];
-  chunkSize?: number;
-}) {
-  const trySizes = buildLogChunkTrySizes(params.chunkSize);
-  const out: ethers.Log[] = [];
-  let start = params.fromBlock;
-  while (start <= params.toBlock) {
-    let stepped = false;
-    for (const chunkSize of trySizes) {
-      const end = Math.min(start + chunkSize - 1, params.toBlock);
-      try {
-        const part = await params.provider.getLogs({
-          address: params.address,
-          fromBlock: start,
-          toBlock: end,
-          topics: params.topics,
-        });
-        out.push(...part);
-        start = end + 1;
-        stepped = true;
-        break;
-      } catch {
-        /* try a smaller span from the same start */
-      }
-    }
-    if (!stepped) {
-      const end = Math.min(start + 500 - 1, params.toBlock);
-      const part = await ethGetLogsRange(params.provider, params.address, params.topics, start, end);
-      out.push(...part);
-      start = end + 1;
-    }
-  }
-  return out;
 }
 
 export function decryptNoteECDH(encryptedNoteHex: `0x${string}`, recipientViewingPriv: bigint) {
@@ -170,8 +69,7 @@ export async function scanShieldedNotes(params: {
   viewingPriv: bigint;
   viewingPub: `0x${string}`;
   /**
-   * First `eth_getLogs` window size (smaller helps Base/Arbitrum Sepolia public RPCs).
-   * Extension defaults to 50k; L2 endpoints often cap ranges tighter — callers may pass ~2000–10000.
+   * Max inclusive `eth_getLogs` window. Alchemy free tier needs ~10; public L2 mirrors often allow ~2000.
    */
   logChunkSize?: number;
   /** When `NEXT_PUBLIC_SHIELDED_SCAN_DEBUG` is set, labels this RPC attempt in console output. */

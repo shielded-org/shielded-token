@@ -60,7 +60,7 @@ export default function DashboardPage() {
         <section className="surface-panel rounded-[32px] p-7 sm:p-8">
           <div className="flex flex-wrap items-start justify-between gap-5">
             <div className="min-w-0 flex-1">
-              <p className="hero-kicker font-mono text-xs uppercase text-[#9ca3af]">
+              <p className="hero-kicker font-mono text-xs uppercase tracking-[0.2em] text-[var(--brand-muted)]">
                 Total Shielded Balance
               </p>
               {isConnected ? (
@@ -73,14 +73,14 @@ export default function DashboardPage() {
                         aria-live="polite"
                         aria-busy="true"
                       >
-                        <span className="inline-flex items-center gap-2.5 font-mono text-2xl text-[#6b7280] sm:text-3xl">
-                          <Loader2 className="size-8 shrink-0 animate-spin text-[#4f46e5] sm:size-9" aria-hidden />
+                        <span className="inline-flex items-center gap-2.5 font-mono text-2xl text-[var(--brand-muted)] sm:text-3xl">
+                          <Loader2 className="size-8 shrink-0 animate-spin text-[var(--brand-accent)] sm:size-9" aria-hidden />
                           Syncing balance…
                         </span>
-                        <span className="text-xs text-[#9ca3af]">Resolving notes on the selected pool network</span>
+                        <span className="text-xs text-[var(--brand-muted)]">Resolving notes on the selected pool network</span>
                       </div>
                     ) : (
-                      <h2 className="font-mono text-5xl text-[#111827] sm:text-6xl">
+                      <h2 className="font-display text-5xl font-semibold text-[var(--brand-fg)] sm:text-6xl">
                         $ {revealBalances ? formatAmount(totalBalance) : "••••••"}
                       </h2>
                     )}
@@ -88,7 +88,7 @@ export default function DashboardPage() {
                       type="button"
                       onClick={() => setRevealBalances(!revealBalances)}
                       disabled={shieldedBalanceLoading}
-                      className="inline-flex size-11 items-center justify-center rounded-full border border-[#d1d5db] bg-white text-[#6b7280] hover:-translate-y-0.5 hover:border-[#a5b4fc] hover:text-[#4f46e5] disabled:pointer-events-none disabled:opacity-40"
+                      className="inline-flex size-11 items-center justify-center rounded-full border border-[var(--brand-border-solid)] bg-[var(--brand-surface)] text-[var(--brand-muted)] transition hover:-translate-y-0.5 hover:border-[var(--brand-accent)]/40 hover:bg-[var(--brand-accent-soft)] hover:text-[var(--brand-accent)] disabled:pointer-events-none disabled:opacity-40"
                     >
                       {revealBalances ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                     </button>
