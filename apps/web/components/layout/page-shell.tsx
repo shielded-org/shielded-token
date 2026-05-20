@@ -21,18 +21,20 @@ export function PageShell({
       <header className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
         <div className="max-w-4xl">
           {eyebrow ? (
-            <p className="hero-kicker font-mono text-xs uppercase text-[#9ca3af]">
+            <p className="hero-kicker font-mono text-xs uppercase tracking-[0.2em] text-[var(--brand-muted)]">
               {eyebrow}
             </p>
           ) : null}
-          <h1 className={cn(
-            "max-w-4xl text-3xl font-semibold tracking-[-0.03em] text-[#111827] sm:text-4xl",
-            eyebrow ? "mt-2" : ""
-          )}>
+          <h1
+            className={cn(
+              "font-display max-w-4xl text-3xl font-semibold tracking-[-0.03em] text-[var(--brand-fg)] sm:text-4xl",
+              eyebrow ? "mt-2" : ""
+            )}
+          >
             {title}
           </h1>
           {description ? (
-            <p className="mt-2 max-w-3xl text-sm leading-7 text-[#6b7280] sm:text-base">
+            <p className="mt-2 max-w-3xl text-sm leading-7 text-[var(--brand-muted)] sm:text-base">
               {description}
             </p>
           ) : null}
