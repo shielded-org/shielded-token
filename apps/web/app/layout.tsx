@@ -1,11 +1,14 @@
 import type {Metadata} from "next";
-import {AppShell} from "@/components/layout/app-shell";
 import {Providers} from "@/components/providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Shielded Token",
-  description: "Privacy-first DeFi interface for shielded transfers on Ethereum.",
+  title: {
+    default: "Shielded — EVM privacy protocol",
+    template: "%s · Shielded",
+  },
+  description:
+    "Private payments on Ethereum. Hold a shielded balance, send without public receipts, withdraw when you are ready.",
 };
 
 export default function RootLayout({
@@ -14,11 +17,9 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <body>
-        <Providers>
-          <AppShell>{children}</AppShell>
-        </Providers>
+        <Providers>{children}</Providers>
       </body>
     </html>
   );
