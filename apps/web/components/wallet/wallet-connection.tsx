@@ -111,7 +111,7 @@ export function WalletConnection() {
               Pool: {poolNet.label}
             </span>
           ) : null}
-          <span className="rounded-full border border-[#c7d2fe] bg-[#eef2ff] px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-[#3730a3]">
+          <span className="rounded-full border border-[var(--brand-accent)]/25 bg-[var(--brand-accent-soft)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--brand-accent)]">
             {chainName}
           </span>
         </div>
