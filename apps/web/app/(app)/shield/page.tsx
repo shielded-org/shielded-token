@@ -1,0 +1,271 @@
+"use client";
+
+import {Copy, ShieldCheck} from "lucide-react";
+import {ethers} from "ethers";
+import {useEffect, useMemo, useState} from "react";
+import {PageShell} from "@/components/layout/page-shell";
+import {AmountInput} from "@/components/ui/amount-input";
+import {ActionOutcomeCard} from "@/components/ui/action-outcome-card";
+import {Button} from "@/components/ui/button";
+import {HashDisplay} from "@/components/ui/hash-display";
+import {PrivacyWarning} from "@/components/ui/privacy-warning";
+import {SelectField} from "@/components/ui/select-field";
+import {getShieldedNetwork, tokenOptionsForShieldedPool} from "@/lib/networks";
+import {formatWalletBroadcastError, fetchShieldedNetworkErc20BalanceRaw} from "@/lib/rpc-read";
+import {shieldDeposit} from "@/lib/shielded-integration";
+import {getBrowserSigner} from "@/lib/web3";
+import {toast} from "@/lib/toast";
+import {copyText, formatAmount, getAmountValidationMessage, nowIso} from "@/lib/utils";
+import {useShieldedStore} from "@/store/use-shielded-store";
+
+function formatReadableBalance(formattedUnits: string, maxFractionDigits = 8): string {
+  const n = Number(formattedUnits);
+  if (!Number.isFinite(n)) return formattedUnits;
+  return n.toLocaleString(undefined, {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: Math.min(maxFractionDigits, 18),
+  });
+}
+
+export default function ShieldPage() {
+  const address = useShieldedStore((state) => state.walletAddress);
+  const addNote = useShieldedStore((state) => state.addNote);
+  const upsertTransaction = useShieldedStore((state) => state.upsertTransaction);
+  const availableTokens = useShieldedStore((state) => state.tokens);
+  const shieldedRpcChainId = useShieldedStore((state) => state.shieldedRpcChainId);
+  const ownerPk = useShieldedStore((state) => state.ownerPk);
+  const viewingPub = useShieldedStore((state) => state.viewingPub);
+  const tokenOptions = useMemo(
+    () => tokenOptionsForShieldedPool(shieldedRpcChainId, availableTokens),
+    [shieldedRpcChainId, availableTokens]
+  );
+
+  const [token, setToken] = useState(() => tokenOptions[0]?.symbol ?? "MOCK");
+  const [amount, setAmount] = useState("100.000000");
+  const [submitting, setSubmitting] = useState(false);
+  const [successNote, setSuccessNote] = useState<`0x${string}` | null>(null);
+  const [successTxHash, setSuccessTxHash] = useState<`0x${string}` | null>(null);
+  const [publicBalanceLabel, setPublicBalanceLabel] = useState<string | null>(null);
+  const [balanceLoading, setBalanceLoading] = useState(false);
+  const [balanceTick, setBalanceTick] = useState(0);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const amountError = getAmountValidationMessage(amount, Number.MAX_SAFE_INTEGER, 6);
+
+  const tokenMeta = tokenOptions.find((t) => t.symbol === token) ?? tokenOptions[0];
+
+  const tokenListKey = useMemo(
+    () => tokenOptions.map((t) => `${t.symbol}:${t.contractAddress.toLowerCase()}`).join("|"),
+    [tokenOptions]
+  );
+
+  useEffect(() => {
+    if (!tokenOptions.length) return;
+    setToken((prev) => (tokenOptions.some((t) => t.symbol === prev) ? prev : tokenOptions[0]!.symbol));
+  }, [shieldedRpcChainId, tokenListKey]);
+
+  useEffect(() => {
+    if (!address) {
+      setPublicBalanceLabel(null);
+      setBalanceLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setBalanceLoading(true);
+    const net = getShieldedNetwork(shieldedRpcChainId);
+    if (!net) {
+      setPublicBalanceLabel(null);
+      setBalanceLoading(false);
+      return;
+    }
+    void (async () => {
+      try {
+        const raw = await fetchShieldedNetworkErc20BalanceRaw(
+          net,
+          address as `0x${string}`,
+          tokenMeta.contractAddress
+        );
+        if (cancelled) return;
+        const formatted = ethers.formatUnits(raw, tokenMeta.decimals);
+        setPublicBalanceLabel(formatReadableBalance(formatted));
+      } catch {
+        if (!cancelled) setPublicBalanceLabel(null);
+      } finally {
+        if (!cancelled) setBalanceLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [address, shieldedRpcChainId, token, tokenMeta.contractAddress, tokenMeta.decimals, balanceTick]);
+
+  async function handleSubmit() {
+    if (!address) {
+      return;
+    }
+    if (!ownerPk || !viewingPub) {
+      return;
+    }
+    setSubmitting(true);
+    setSubmitError(null);
+    const net = getShieldedNetwork(shieldedRpcChainId);
+    try {
+      const noteId = crypto.randomUUID();
+      const signer = await getBrowserSigner(address);
+      const parsedAmount = ethers.parseUnits(amount || "0", tokenMeta.decimals);
+      const result = await shieldDeposit({
+        signer,
+        ownerPk: BigInt(ownerPk),
+        viewingPub,
+        tokenAddress: tokenMeta.contractAddress,
+        amount: parsedAmount,
+        shieldedChainId: shieldedRpcChainId,
+      });
+      addNote({
+        id: noteId,
+        token,
+        shieldedChainId: shieldedRpcChainId,
+        tokenContractAddress: ethers.getAddress(tokenMeta.contractAddress) as `0x${string}`,
+        amount: Number(amount || 0).toFixed(6),
+        status: "unspent",
+        commitment: result.commitment,
+        encryptedNote: result.encryptedNote,
+        discoveredAt: nowIso(),
+        source: "shield",
+        txHash: result.txHash,
+      });
+      upsertTransaction({
+        id: noteId,
+        kind: "shield",
+        token,
+        amount: Number(amount || 0).toFixed(6),
+        createdAt: nowIso(),
+        status: "confirmed",
+        txHash: result.txHash,
+      });
+      setSuccessNote(result.encryptedNote);
+      setSuccessTxHash(result.txHash);
+      setBalanceTick((n) => n + 1);
+      toast.success(`Shield deposit confirmed: ${formatAmount(amount)} ${token}. Your new private note is ready to scan.`);
+    } catch (err) {
+      const msg = net ? formatWalletBroadcastError(err, net) : err instanceof Error ? err.message : String(err);
+      console.error("[shield] deposit failed:", err);
+      setSubmitError(msg);
+      toast.error(msg.length > 420 ? `${msg.slice(0, 420)}…` : msg);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <PageShell
+      eyebrow="Boundary Action"
+      title="Enter the private pool."
+      description="Deposit publicly once, then hold spendable value in private state. This flow keeps boundary visibility clear."
+    >
+      <div className="grid gap-6 xl:grid-cols-[1fr_0.82fr]">
+        <section className="surface-panel rounded-[32px] p-7 sm:p-8">
+          <div className="space-y-5">
+            <PrivacyWarning message="This action is a public boundary — your deposit address and amount are visible on-chain." variant="warning" />
+            <div className="grid gap-5">
+              <label className="space-y-2">
+                <span className="text-sm text-[#6b7280]">Token</span>
+                <SelectField value={token} onChange={(event) => setToken(event.target.value)}>
+                  {tokenOptions.map((item) => (
+                    <option key={item.symbol} value={item.symbol}>
+                      {item.name}
+                    </option>
+                  ))}
+                </SelectField>
+                <p className="text-sm text-[#6b7280]" aria-live="polite">
+                  {!address ? (
+                    <>Connect your wallet to see your public balance available for shielding.</>
+                  ) : balanceLoading ? (
+                    <>Loading public balance…</>
+                  ) : publicBalanceLabel !== null ? (
+                    <>
+                      Public balance:{" "}
+                      <span className="font-mono text-[#374151]">
+                        {publicBalanceLabel} {token}
+                      </span>
+                    </>
+                  ) : (
+                    <>Could not load balance for this token.</>
+                  )}
+                </p>
+              </label>
+              <label className="space-y-2">
+                <span className="text-sm text-[#6b7280]">Amount</span>
+                <AmountInput value={amount} onChange={setAmount} />
+                {amountError ? <p className="text-xs text-amber-300">{amountError}</p> : null}
+              </label>
+            </div>
+            <Button className="rounded-2xl" onClick={handleSubmit} disabled={submitting || Boolean(amountError)} icon={<ShieldCheck className="size-4" />}>
+              {submitting ? "Registering note..." : "Shield via wallet"}
+            </Button>
+            {submitError ? (
+              <p className="rounded-xl border border-amber-200/40 bg-amber-50/90 p-3 text-xs leading-relaxed text-amber-950">{submitError}</p>
+            ) : null}
+            {amountError && !submitting ? (
+              <p className="text-xs text-[#6b7280]">Fix amount input to continue.</p>
+            ) : null}
+
+            {successNote ? (
+              <div className="space-y-3">
+                <ActionOutcomeCard
+                  title="Deposit completed"
+                  summary={`Created 1 new unspent ${token} note worth ${formatAmount(amount)}. You can now spend privately from the pool.`}
+                  visibilityNote="Public footprint: deposit address and amount are visible on-chain."
+                  txHash={successTxHash}
+                  status="warning"
+                />
+                <div className="flex flex-wrap items-center gap-3">
+                  <HashDisplay value={successNote} />
+                  <button
+                    type="button"
+                    onClick={() => copyText(successNote)}
+                    className="inline-flex items-center gap-2 rounded-md border border-[#d1d5db] bg-white px-3 py-2 text-xs text-[#374151] transition hover:text-[#4f46e5]"
+                  >
+                    <Copy className="size-3.5" />
+                    Copy note
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </section>
+
+        <aside className="space-y-5">
+          <section className="surface-panel rounded-[32px] p-7">
+            <p className="hero-kicker font-mono text-xs uppercase text-[#9ca3af]">
+              What happens
+            </p>
+            <ol className="mt-5 space-y-4 text-sm leading-8 text-[#6b7280]">
+              <li>1. Your wallet signs a public on-chain deposit into the shielded contract.</li>
+              <li>2. The app derives a fresh note commitment and encrypted payload.</li>
+              <li>3. The note becomes discoverable later through private inbox scanning.</li>
+            </ol>
+          </section>
+          <section className="surface-panel rounded-[32px] p-7">
+            <p className="hero-kicker font-mono text-xs uppercase text-[#9ca3af]">
+              Deposit summary
+            </p>
+            <div className="mt-5 space-y-3 rounded-[26px] border border-[#e5e7eb] bg-[#f9fafb] p-5">
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-[#9ca3af]">Token</span>
+                <span className="text-[#111827]">{token}</span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-[#9ca3af]">Amount</span>
+                <span className="font-mono text-[#111827]">{formatAmount(amount)} {token}</span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span className="text-[#9ca3af]">Pool mode</span>
+                <span className="text-[#111827]">Shielded entry</span>
+              </div>
+            </div>
+          </section>
+        </aside>
+      </div>
+    </PageShell>
+  );
+}
