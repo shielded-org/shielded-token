@@ -9,7 +9,7 @@ export function LandingHeroVisual() {
       <div className="landing-hero-visual-ring landing-hero-visual-ring-a" />
       <div className="landing-hero-visual-ring landing-hero-visual-ring-b" />
 
-      <div className="relative mx-auto aspect-square max-h-[420px] w-full max-w-[420px]">
+      <div className="relative mx-auto aspect-square w-full max-w-[min(100%,280px)] sm:max-w-[360px] lg:max-h-[420px] lg:max-w-[420px]">
         <div className="landing-hero-visual-card landing-hero-visual-card-tl">
           <Wallet className="size-4 text-[var(--landing-accent)]" />
           <span className="mt-2 block text-xs font-semibold text-[var(--landing-fg)]">Your balance</span>

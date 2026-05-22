@@ -122,7 +122,7 @@ export default function LandingPage() {
             <p className="landing-kicker font-mono text-xs uppercase tracking-[0.35em] text-[var(--landing-muted)]">
               Private payments on Ethereum
             </p>
-            <h1 className="font-display mt-6 text-5xl font-semibold leading-[1.05] tracking-tight text-[var(--landing-fg)] sm:text-6xl xl:text-7xl">
+            <h1 className="font-display mt-6 text-4xl font-semibold leading-[1.05] tracking-tight text-[var(--landing-fg)] sm:text-5xl md:text-6xl xl:text-7xl">
               Pay without the public receipt.
             </h1>
             <p className="mt-6 text-base leading-8 text-[var(--landing-muted)] sm:text-lg">
@@ -162,7 +162,9 @@ export default function LandingPage() {
               ))}
             </ul>
           </div>
-          <LandingHeroVisual />
+          <div className="mx-auto w-full max-w-md lg:max-w-none">
+            <LandingHeroVisual />
+          </div>
         </div>
       </section>
 

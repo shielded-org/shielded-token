@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import {usePathname} from "next/navigation";
-import {AlertCircle, Droplets, House, Info, Menu, Settings, Shield, TerminalSquare, X} from "lucide-react";
+import {AlertCircle, Droplets, Info, LogOut, Menu, Settings, Shield, TerminalSquare, X} from "lucide-react";
 import {ethers} from "ethers";
 import {useCallback, useEffect, useRef, useState} from "react";
 import {WalletConnection} from "@/components/wallet/wallet-connection";
 import {WalletNetworkSyncBanner} from "@/components/wallet/wallet-network-sync-banner";
+import {appPageTitle} from "@/lib/app-page-title";
 import {NAV_ITEMS, RELAYER_URL} from "@/lib/constants";
 import {
   deriveShieldedKeysFromWallet,
@@ -38,6 +39,15 @@ import {useShieldedStore} from "@/store/use-shielded-store";
 export function AppShell({children}: {children: React.ReactNode}) {
   const pathname = usePathname();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+
+  useEffect(() => {
+    if (!mobileSidebarOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [mobileSidebarOpen]);
   const [persistHydrated, setPersistHydrated] = useState(() => useShieldedStore.persist.hasHydrated());
   const address = useShieldedStore((state) => state.walletAddress);
   const keyMaterialAddress = useShieldedStore((state) => state.keyMaterialAddress);
@@ -55,6 +65,7 @@ export function AppShell({children}: {children: React.ReactNode}) {
   const shieldedRpcChainId = useShieldedStore((state) => state.shieldedRpcChainId);
   const setShieldedRpcChainId = useShieldedStore((state) => state.setShieldedRpcChainId);
   const setWalletConnection = useShieldedStore((state) => state.setWalletConnection);
+  const clearKeyMaterial = useShieldedStore((state) => state.clearKeyMaterial);
 
   const onPoolNetworkChange = useCallback(
     (nextId: ShieldedChainId) => {
@@ -514,6 +525,13 @@ export function AppShell({children}: {children: React.ReactNode}) {
   }, [tokens, shieldedRpcChainId, setNotes]);
 
   const shieldedNetworks = getShieldedNetworks();
+  const mobilePageTitle = appPageTitle(pathname);
+
+  function disconnectWallet() {
+    setWalletConnection(null, null);
+    clearKeyMaterial();
+    setMobileSidebarOpen(false);
+  }
 
   return (
     <div className="app-theme">
@@ -531,7 +549,7 @@ export function AppShell({children}: {children: React.ReactNode}) {
 
         <aside
           className={cn(
-            "app-sidebar fixed inset-y-0 left-0 z-50 w-[250px] border-r px-4 py-5 backdrop-blur-md transition-transform duration-200 lg:static lg:z-auto lg:translate-x-0",
+            "app-sidebar app-sidebar-drawer fixed inset-y-0 left-0 z-50 border-r px-4 py-5 backdrop-blur-md transition-transform duration-200 lg:static lg:z-auto lg:w-[250px] lg:translate-x-0",
             mobileSidebarOpen ? "translate-x-0" : "-translate-x-full"
           )}
         >
@@ -589,45 +607,87 @@ export function AppShell({children}: {children: React.ReactNode}) {
               <Settings className="size-4" /> Settings
             </Link>
           </div>
+          {address ? (
+            <button
+              type="button"
+              onClick={disconnectWallet}
+              className="app-nav-link mt-6 w-full text-[var(--brand-muted)] hover:text-red-700 lg:hidden"
+            >
+              <LogOut className="size-4" />
+              Disconnect wallet
+            </button>
+          ) : null}
         </aside>
 
-        <div className="flex flex-1 flex-col px-3 py-3 sm:px-4 lg:px-6 lg:py-4">
-          <header className="surface-panel rounded-2xl px-5 py-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <nav className="flex items-center gap-5 text-sm text-[var(--brand-muted)]">
+        <div className="flex min-w-0 w-full flex-1 flex-col px-2.5 py-3 sm:px-4 lg:px-6 lg:py-4">
+          <header className="surface-panel w-full min-w-0 rounded-2xl px-3 py-3 sm:px-5 sm:py-4">
+            {/* Mobile */}
+            <div className="flex flex-col gap-3 lg:hidden">
+              <div className="flex items-center gap-3">
                 <button
                   type="button"
                   onClick={() => setMobileSidebarOpen(true)}
-                  className="app-btn-secondary inline-flex rounded-lg !h-auto border p-1.5 !px-1.5 !py-1.5 shadow-none lg:hidden"
+                  className="app-menu-btn"
                   aria-label="Open navigation"
                 >
-                  <Menu className="size-4" />
+                  <Menu className="size-5" />
                 </button>
-                <span className="inline-flex items-center gap-1.5 font-medium text-[var(--brand-fg)]">
-                  <House className="size-4 text-[var(--brand-accent)]" /> Home
-                </span>
-                <span className="app-badge-sync inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs">
-                  Synced to block <strong>{lastSyncedBlock.toLocaleString()}</strong>
-                </span>
-              </nav>
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                {shieldedNetworks.length > 1 ? (
-                  <label className="flex items-center gap-2 text-xs text-[var(--brand-muted)]">
-                    <span className="whitespace-nowrap">Pool network</span>
-                    <select
-                      className="app-select px-2 py-1.5 text-xs"
-                      value={shieldedRpcChainId}
-                      onChange={(e) => onPoolNetworkChange(Number(e.target.value) as ShieldedChainId)}
-                    >
-                      {shieldedNetworks.map((n) => (
-                        <option key={n.id} value={n.id}>
-                          {n.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                ) : null}
-                <WalletConnection />
+                <h1 className="font-display min-w-0 flex-1 truncate text-base font-semibold text-[var(--brand-fg)]">
+                  {mobilePageTitle}
+                </h1>
+                <WalletConnection variant="compact" />
+              </div>
+              {shieldedNetworks.length > 1 ? (
+                <label className="flex w-full flex-col gap-1.5 text-xs text-[var(--brand-muted)]">
+                  <span className="font-medium">Pool network</span>
+                  <select
+                    className="app-select w-full px-3 py-2.5 text-sm"
+                    value={shieldedRpcChainId}
+                    onChange={(e) => onPoolNetworkChange(Number(e.target.value) as ShieldedChainId)}
+                  >
+                    {shieldedNetworks.map((n) => (
+                      <option key={n.id} value={n.id}>
+                        {n.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              <span className="app-badge-sync inline-flex w-full items-center justify-center gap-1 rounded-full px-3 py-2 text-xs">
+                Synced to block <strong>{lastSyncedBlock.toLocaleString()}</strong>
+              </span>
+            </div>
+
+            {/* Desktop */}
+            <div className="hidden flex-col gap-3 lg:flex">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <nav className="flex items-center gap-5 text-sm text-[var(--brand-muted)]">
+                  <span className="inline-flex items-center gap-1.5 font-medium text-[var(--brand-fg)]">
+                    <span className="text-[var(--brand-accent)]">●</span> App
+                  </span>
+                  <span className="app-badge-sync inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs">
+                    Synced to block <strong>{lastSyncedBlock.toLocaleString()}</strong>
+                  </span>
+                </nav>
+                <div className="flex flex-wrap items-center justify-end gap-2">
+                  {shieldedNetworks.length > 1 ? (
+                    <label className="flex items-center gap-2 text-xs text-[var(--brand-muted)]">
+                      <span className="whitespace-nowrap">Pool network</span>
+                      <select
+                        className="app-select px-2 py-1.5 text-xs"
+                        value={shieldedRpcChainId}
+                        onChange={(e) => onPoolNetworkChange(Number(e.target.value) as ShieldedChainId)}
+                      >
+                        {shieldedNetworks.map((n) => (
+                          <option key={n.id} value={n.id}>
+                            {n.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
+                  <WalletConnection />
+                </div>
               </div>
             </div>
             <WalletNetworkSyncBanner />
@@ -706,7 +766,7 @@ export function AppShell({children}: {children: React.ReactNode}) {
             ) : null}
           </header>
 
-          <main className="flex-1 pt-6">{children}</main>
+          <main className="w-full min-w-0 flex-1 pt-4 lg:pt-6">{children}</main>
         </div>
       </div>
     </div>

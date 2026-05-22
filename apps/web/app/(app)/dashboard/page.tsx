@@ -56,16 +56,16 @@ export default function DashboardPage() {
       title="Private dashboard"
       description="Private balance and spendability first. Advanced cryptographic details stay hidden unless explicitly revealed."
     >
-      <div className="grid gap-6">
-        <section className="surface-panel rounded-[32px] p-7 sm:p-8">
-          <div className="flex flex-wrap items-start justify-between gap-5">
-            <div className="min-w-0 flex-1">
+      <div className="grid w-full min-w-0 gap-4 sm:gap-6">
+        <section className="surface-panel w-full min-w-0 rounded-2xl p-4 sm:rounded-[28px] sm:p-7 md:p-8">
+          <div className="flex flex-col gap-6">
+            <div className="min-w-0 w-full">
               <p className="hero-kicker font-mono text-xs uppercase tracking-[0.2em] text-[var(--brand-muted)]">
                 Total Shielded Balance
               </p>
               {isConnected ? (
                 <>
-                  <div className="mt-5 flex items-center gap-3">
+                  <div className="mt-4 flex flex-wrap items-center gap-3 sm:mt-5">
                     {shieldedBalanceLoading ? (
                       <div
                         className="flex min-h-14 flex-col justify-center gap-2 sm:min-h-16"
@@ -80,7 +80,7 @@ export default function DashboardPage() {
                         <span className="text-xs text-[var(--brand-muted)]">Resolving notes on the selected pool network</span>
                       </div>
                     ) : (
-                      <h2 className="font-display text-5xl font-semibold text-[var(--brand-fg)] sm:text-6xl">
+                      <h2 className="font-display text-3xl font-semibold tracking-tight text-[var(--brand-fg)] sm:text-5xl md:text-6xl">
                         $ {revealBalances ? formatAmount(totalBalance) : "••••••"}
                       </h2>
                     )}
@@ -103,12 +103,12 @@ export default function DashboardPage() {
                     <h2 className="font-mono text-4xl text-[#111827] sm:text-5xl">Connect wallet</h2>
                   </div>
                   <p className="mt-4 max-w-2xl text-sm leading-7 text-[#6b7280]">
-                    Connect an injected wallet from the header to load your shielded keys, sync private notes, and unlock dashboard balances.
+                    Connect a wallet from the menu above to load your shielded keys, sync private notes, and unlock dashboard balances.
                   </p>
                 </>
               )}
             </div>
-            <div className="min-w-[260px] max-w-full rounded-[26px] border border-[#e5e7eb] bg-white px-4 py-4">
+            <div className="w-full min-w-0 rounded-2xl border border-[var(--brand-border)] bg-[var(--brand-surface)] px-4 py-4 sm:rounded-[26px]">
               <p className="text-xs uppercase tracking-[0.2em] text-[#9ca3af]">Shielded address</p>
               <p className="mt-2 text-sm text-[#6b7280]">
                 {shieldedAddress ? "Copy your private receive address." : "Connect wallet to generate your receive address."}
@@ -125,7 +125,7 @@ export default function DashboardPage() {
             </div>
           </div>
           {isConnected ? (
-            <div className="mt-8 grid gap-3 sm:grid-cols-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
               <MetricCard
                 label="Unspent Notes"
                 value={<span className="font-mono">{notes.filter((note) => note.status === "unspent").length}</span>}
@@ -150,9 +150,9 @@ export default function DashboardPage() {
       </div>
 
       {isConnected ? (
-        <section className="grid gap-5 xl:grid-cols-[1fr_1fr]">
-          <div className="surface-panel rounded-[32px] p-7">
-            <div className="flex items-center justify-between">
+        <section className="grid w-full min-w-0 gap-4 sm:gap-5 xl:grid-cols-[1fr_1fr]">
+          <div className="surface-panel w-full min-w-0 rounded-2xl p-4 sm:rounded-[28px] sm:p-7">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="hero-kicker font-mono text-xs uppercase text-[#9ca3af]">
                   Token Breakdown
@@ -202,10 +202,10 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <div className="surface-panel rounded-[32px] p-7">
-            <div className="flex items-center justify-between">
+          <div className="surface-panel w-full min-w-0 rounded-2xl p-4 sm:rounded-[28px] sm:p-7">
+            <div>
               <div>
-                <p className="hero-kicker font-mono text-xs uppercase text-[#9ca3af]">
+                <p className="hero-kicker font-mono text-xs uppercase text-[var(--brand-muted)]">
                   Recent Activity
                 </p>
                 <h3 className="mt-3 text-2xl font-semibold tracking-[-0.03em] text-[#111827]">
