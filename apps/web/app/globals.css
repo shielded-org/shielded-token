@@ -292,6 +292,30 @@ textarea {
   box-shadow: 0 0 0 4px var(--brand-accent-soft);
 }
 
+.app-menu-btn {
+  display: inline-flex;
+  width: 2.5rem;
+  height: 2.5rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.75rem;
+  border: 1px solid var(--brand-border);
+  background: var(--brand-surface);
+  color: var(--brand-fg);
+  flex-shrink: 0;
+}
+
+.app-menu-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--brand-accent-ring);
+}
+
+.app-sidebar-drawer {
+  display: flex;
+  flex-direction: column;
+  width: min(18rem, 88vw);
+}
+
 .soft-divider {
   position: relative;
 }
@@ -482,6 +506,11 @@ textarea {
 
 .landing-footer {
   background: var(--landing-bg-elevated);
+}
+
+.landing-nav-menu-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--brand-accent-ring);
 }
 
 /* Hero visual */

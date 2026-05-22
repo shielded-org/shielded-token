@@ -9,9 +9,10 @@ import {getShieldedNetwork} from "@/lib/networks";
 import {useHasMounted} from "@/lib/use-has-mounted";
 import {shortenHash} from "@/lib/utils";
 import {arbitrumSepolia, baseSepolia, mainnet, sepolia} from "wagmi/chains";
+import {cn} from "@/lib/utils";
 import {useShieldedStore} from "@/store/use-shielded-store";
 
-export function WalletConnection() {
+export function WalletConnection({variant = "default"}: {variant?: "default" | "compact"}) {
   const hasMounted = useHasMounted();
   const address = useShieldedStore((state) => state.walletAddress);
   const chainId = useShieldedStore((state) => state.chainId);
@@ -87,51 +88,62 @@ export function WalletConnection() {
     clearKeyMaterial();
   }
 
+  const compact = variant === "compact";
+
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div className={cn("flex max-w-full items-center justify-end gap-2", !compact && "flex-wrap")}>
       {isConnected ? (
-        <div className="inline-flex items-center gap-2 rounded-full border border-[#d1d5db] bg-white px-3 py-2 text-xs text-[#374151]">
-          <BadgeCheck className="size-3.5 text-[#4f46e5]" />
-          <span className="font-mono">{shortenHash(address ?? "")}</span>
-          <span className="text-[#6b7280]">
-            {nativeBalance
-              ? `${Number(nativeBalance).toFixed(3)} ETH`
-              : chainName}
-          </span>
-          {!supportedChain ? (
-            <span className="rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-amber-300">
-              Wrong network
-            </span>
+        <div
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-full border border-[#d1d5db] bg-white text-xs text-[#374151]",
+            compact ? "max-w-[7.5rem] px-2 py-1.5" : "max-w-[min(100%,14rem)] px-2.5 py-1.5 sm:max-w-none sm:gap-2 sm:px-3 sm:py-2"
+          )}
+          title={address ?? undefined}
+        >
+          <BadgeCheck className="size-3.5 shrink-0 text-[#4f46e5]" />
+          <span className="truncate font-mono">{shortenHash(address ?? "")}</span>
+          {!compact ? (
+            <>
+              <span className="hidden text-[#6b7280] sm:inline">
+                {nativeBalance ? `${Number(nativeBalance).toFixed(3)} ETH` : chainName}
+              </span>
+              {!supportedChain ? (
+                <span className="hidden rounded-full border border-amber-400/25 bg-amber-400/10 px-2 py-0.5 text-[10px] uppercase tracking-[0.18em] text-amber-800 sm:inline">
+                  Wrong network
+                </span>
+              ) : null}
+              {supportedChain && poolNet && !walletMatchesPool ? (
+                <span
+                  className="hidden max-w-44 truncate rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-amber-800 md:inline"
+                  title={`Pool network is ${poolNet.label}. Use Switch wallet in the header banner to align your wallet.`}
+                >
+                  Pool: {poolNet.label}
+                </span>
+              ) : null}
+              <span className="hidden rounded-full border border-[var(--brand-accent)]/25 bg-[var(--brand-accent-soft)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--brand-accent)] sm:inline">
+                {chainName}
+              </span>
+            </>
           ) : null}
-          {supportedChain && isConnected && poolNet && !walletMatchesPool ? (
-            <span
-              className="max-w-44 truncate rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-amber-800"
-              title={`Pool network is ${poolNet.label}. Use Switch wallet in the header banner to align your wallet.`}
-            >
-              Pool: {poolNet.label}
-            </span>
-          ) : null}
-          <span className="rounded-full border border-[var(--brand-accent)]/25 bg-[var(--brand-accent-soft)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-[var(--brand-accent)]">
-            {chainName}
-          </span>
         </div>
       ) : null}
-      {isConnected ? (
-        <Button variant="secondary" onClick={disconnectWallet}>
+      {isConnected && !compact ? (
+        <Button variant="secondary" className="!h-9 shrink-0 px-3 text-xs sm:!h-11 sm:px-4 sm:text-sm" onClick={disconnectWallet}>
           Disconnect
         </Button>
-      ) : (
+      ) : null}
+      {!isConnected ? (
         <Button
           variant="primary"
-          className="rounded-full px-5"
+          className={cn("shrink-0 rounded-full", compact ? "!h-9 px-3 text-xs" : "px-4 text-xs sm:px-5 sm:text-sm")}
           icon={<PlugZap className="size-4" />}
           disabled={connectorUnavailable || isPending}
           onClick={() => setShowWalletDialog(true)}
         >
-          {isPending ? "Connecting..." : "Connect wallet"}
+          {isPending ? "…" : compact ? "Connect" : "Connect wallet"}
         </Button>
-      )}
-      {!isConnected && connectorUnavailable ? (
+      ) : null}
+      {!isConnected && connectorUnavailable && !compact ? (
         <span className="text-xs text-amber-700">No wallet connector configured.</span>
       ) : null}
 

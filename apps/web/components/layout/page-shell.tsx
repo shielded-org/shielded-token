@@ -17,8 +17,8 @@ export function PageShell({
   className?: string;
 }) {
   return (
-    <section className={cn("space-y-6 animate-page-enter", className)}>
-      <header className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
+    <section className={cn("w-full min-w-0 space-y-4 animate-page-enter sm:space-y-6", className)}>
+      <header className="hidden gap-4 lg:grid xl:grid-cols-[minmax(0,1fr)_auto] xl:items-end">
         <div className="max-w-4xl">
           {eyebrow ? (
             <p className="hero-kicker font-mono text-xs uppercase tracking-[0.2em] text-[var(--brand-muted)]">
