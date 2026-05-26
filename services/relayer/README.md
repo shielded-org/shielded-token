@@ -20,25 +20,7 @@ From `services/relayer` (same as Render):
 npm ci && npm start
 ```
 
-## Deploy on Render
 
-**You must set Root Directory in the dashboard** (Settings → Root Directory):
-
-```text
-services/relayer
-```
-
-If Root Directory is empty, Render runs `npm ci` at the **repo root** and fails with `npm error Invalid Version`. The `rootDir` in `render.yaml` only applies when the service is managed by a synced Blueprint.
-
-| Setting | Value |
-| --- | --- |
-| **Root Directory** | `services/relayer` |
-| **Build Command** | `npm ci` |
-| **Start Command** | `npm start` |
-
-**Docker alternative:** Runtime = Docker, Root Directory = `services/relayer`, Dockerfile = `Dockerfile`.
-
-Set `RELAYER_SIGNER_PRIVATE_KEYS` and `RELAYER_RPC_URL_*` in Environment. Use `https://<host>/healthz` to confirm `onchain` mode.
 
 ## Environment
 

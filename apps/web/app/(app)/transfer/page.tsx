@@ -13,6 +13,7 @@ import {InputField} from "@/components/ui/input-field";
 import {SelectField} from "@/components/ui/select-field";
 import {decodeShieldedAddress} from "@/lib/shielded-address";
 import {usePoolScopedNotes} from "@/hooks/use-pool-scoped-notes";
+import {RELAYER_URL} from "@/lib/constants";
 import {tokenOptionsForShieldedPool} from "@/lib/networks";
 import {mapRelayStatusMessageToProofStep, suggestedEtaForProofStep} from "@/lib/transfer-progress";
 import {toast} from "@/lib/toast";
@@ -123,7 +124,7 @@ export default function TransferPage() {
         : {ownerPk: BigInt(ownerPk), viewingPub: recipient as `0x${string}`};
       const {executePrivateTransfer} = await import("@/lib/private-transfer");
       const relayerResponse = await executePrivateTransfer({
-        relayerUrl: process.env.NEXT_PUBLIC_RELAYER_URL ?? "http://127.0.0.1:8787",
+        relayerUrl: RELAYER_URL,
         shieldedChainId: shieldedRpcChainId,
         senderSpendingKey: BigInt(spendingKey),
         senderOwnerPk: BigInt(ownerPk),

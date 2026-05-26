@@ -2,7 +2,7 @@ import {FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState} from "
 import {ethers} from "ethers";
 import {Download, Lock} from "lucide-react";
 
-import {ERC20_ABI, POOL_ABI, POSEIDON_ABI} from "./config";
+import {ERC20_ABI, POOL_ABI, POSEIDON_ABI, RELAYER_URL} from "./config";
 import {
   CHAIN_ID_ETH_SEPOLIA,
   defaultShieldedChainId,
@@ -370,7 +370,7 @@ export default function App() {
   const [recipientViewingPub, setRecipientViewingPub] = useState("");
   const [recipientShieldedAddress, setRecipientShieldedAddress] = useState("");
   const [advancedRecipientMode, setAdvancedRecipientMode] = useState(false);
-  const [relayerUrl, setRelayerUrl] = useState("http://127.0.0.1:8787");
+  const [relayerUrl, setRelayerUrl] = useState(RELAYER_URL);
   const actionRunId = useRef(0);
   const isActionRunning = (label: string) => activeAction === label;
   const [accounts, setAccounts] = useState<Array<{id: string; name: string; address: `0x${string}`}>>([]);

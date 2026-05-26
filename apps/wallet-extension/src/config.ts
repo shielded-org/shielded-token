@@ -1,5 +1,14 @@
 import {CHAIN_ID_ETH_SEPOLIA, getShieldedNetwork} from "./networks";
 
+/** Production relayer on Render; override with VITE_RELAYER_URL for local dev. */
+export const DEFAULT_RELAYER_URL = "https://shielded-token.onrender.com";
+
+export const RELAYER_URL = (
+  typeof import.meta.env.VITE_RELAYER_URL === "string" && import.meta.env.VITE_RELAYER_URL.trim() !== ""
+    ? import.meta.env.VITE_RELAYER_URL.trim().replace(/\/$/, "")
+    : DEFAULT_RELAYER_URL
+);
+
 const eth = getShieldedNetwork(CHAIN_ID_ETH_SEPOLIA)!;
 
 /** @deprecated Use getShieldedNetwork(chainId) for multi-chain */
