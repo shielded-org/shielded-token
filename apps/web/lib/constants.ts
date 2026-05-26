@@ -1,7 +1,10 @@
 import type {TokenDefinition} from "./types";
 
+/** Production relayer on Render; override with NEXT_PUBLIC_RELAYER_URL for local dev. */
+export const DEFAULT_RELAYER_URL = "https://shielded-token.onrender.com";
+
 export const RELAYER_URL =
-  process.env.NEXT_PUBLIC_RELAYER_URL ?? "http://127.0.0.1:8787";
+  process.env.NEXT_PUBLIC_RELAYER_URL ?? DEFAULT_RELAYER_URL;
 
 export const WALLETCONNECT_PROJECT_ID =
   process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID ?? "demo-project-id";

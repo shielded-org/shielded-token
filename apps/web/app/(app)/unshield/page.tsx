@@ -14,6 +14,7 @@ import {PrivacyWarning} from "@/components/ui/privacy-warning";
 import {SegmentedControl} from "@/components/ui/segmented-control";
 import {StatusBadge} from "@/components/ui/status-badge";
 import {usePoolScopedNotes} from "@/hooks/use-pool-scoped-notes";
+import {RELAYER_URL} from "@/lib/constants";
 import {tokenOptionsForShieldedPool} from "@/lib/networks";
 import {mapRelayStatusMessageToProofStep, suggestedEtaForProofStep} from "@/lib/transfer-progress";
 import {toast} from "@/lib/toast";
@@ -106,7 +107,7 @@ export default function UnshieldPage() {
       setEtaSeconds(suggestedEtaForProofStep("witness"));
       const {executeUnshield} = await import("@/lib/private-transfer");
       const response = await executeUnshield({
-        relayerUrl: process.env.NEXT_PUBLIC_RELAYER_URL ?? "http://127.0.0.1:8787",
+        relayerUrl: RELAYER_URL,
         shieldedChainId: shieldedRpcChainId,
         senderSpendingKey: BigInt(spendingKey),
         senderViewingPriv: BigInt(viewingKey),

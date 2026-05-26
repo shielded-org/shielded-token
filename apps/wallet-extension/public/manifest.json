@@ -25,6 +25,7 @@
   "host_permissions": [
     "https://ethereum-sepolia-rpc.publicnode.com/*",
     "https://base-sepolia-rpc.publicnode.com/*",
+    "https://shielded-token.onrender.com/*",
     "http://127.0.0.1:8787/*",
     "http://localhost:8787/*",
     "http://0.0.0.0:8787/*"
