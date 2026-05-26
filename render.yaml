@@ -1,6 +1,7 @@
-# Render Blueprint — deploy relayer from monorepo root.
-# Dashboard: New → Blueprint, or link repo and apply this file.
-# Set secrets in Render UI: RELAYER_SIGNER_PRIVATE_KEYS, RELAYER_RPC_URL_* .
+# Render Blueprint — relayer only.
+# If you created the service manually, set Root Directory = services/relayer in the dashboard
+# (Blueprint rootDir alone is not applied until the service is linked to this file).
+# Secrets: RELAYER_SIGNER_PRIVATE_KEYS, RELAYER_RPC_URL_* in Render UI.
 
 services:
   - type: web
