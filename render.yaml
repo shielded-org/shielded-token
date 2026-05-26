@@ -6,9 +6,10 @@ services:
   - type: web
     name: shielded-relayer
     runtime: node
-    rootDir: .
-    buildCommand: npm install
-    startCommand: npm run start --workspace @zkproject/relayer
+    # Deploy only the relayer package (avoids monorepo lockfile / web app deps).
+    rootDir: services/relayer
+    buildCommand: npm ci
+    startCommand: npm start
     healthCheckPath: /healthz
     envVars:
       - key: NODE_VERSION

@@ -8,9 +8,29 @@ Relayer API for private shielded-transfer submission:
 
 ## Run
 
+From monorepo root:
+
 ```bash
 npm run dev --workspace @zkproject/relayer
 ```
+
+From `services/relayer` alone (matches Render):
+
+```bash
+npm ci && npm start
+```
+
+## Deploy on Render
+
+| Setting | Value |
+| --- | --- |
+| **Root Directory** | `services/relayer` |
+| **Build Command** | `npm ci` |
+| **Start Command** | `npm start` |
+
+Do **not** run `npm install` at the **repository root** for the relayer — the root lockfile includes the web app and can fail with `npm error Invalid Version`.
+
+`PORT` is set by Render automatically. Add `RELAYER_SIGNER_PRIVATE_KEYS` and `RELAYER_RPC_URL_*` in the dashboard.
 
 ## Environment
 
