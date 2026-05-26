@@ -14,9 +14,9 @@ import {
 import {getWorkingReadProvider} from "./rpc-read";
 import {deriveOwnerPk, deriveUserKeys, keySeedFromPrivateKey, viewingPrivToPub} from "./keys";
 import {executePrivateTransfer, executeUnshield} from "./privateTransfer";
-import {scanShieldedNotes} from "./shielded";
+import {scanShieldedNotesWithRpcFallback} from "./shielded-integration";
 import type {DecryptedNote} from "./shielded";
-import {decodeShieldedAddress, encodeShieldedAddress} from "./shieldedAddress";
+import {decodeShieldedAddress, encodeShieldedAddress, isValidViewingKey} from "./shieldedAddress";
 import {l2GasLimitOverride, txFeeOverrides} from "./tx-gas";
 import {addVaultDerivedAccount, clearVault, listVaultAccountsMeta, readLastOpenedAccountId, readVaultMeta, readWalletMnemonic, setLastOpenedAccountId, storePrivateKey, unlockPrivateKey, unlockVaultAccount} from "./storage";
 import {Badge} from "./components/Badge";
@@ -634,8 +634,7 @@ export default function App() {
     const scanFromBlock = cacheMatchesViewer
       ? Math.max(poolDeployBlock, cached.lastScannedBlock + 1)
       : poolDeployBlock;
-    const scan = await scanShieldedNotes({
-      provider: rpc,
+    const scan = await scanShieldedNotesWithRpcFallback(net, {
       poolAddress: net.contracts.pool as `0x${string}`,
       fromBlock: scanFromBlock,
       viewingPriv: owner.viewingPriv,
@@ -1130,13 +1129,28 @@ export default function App() {
         const senderViewingPub = viewingPrivToPub(sender.viewingPriv);
         const senderCache = readScanCache(senderViewingPub, scanCtx);
         const requestedAmount = ethers.parseUnits(sendAmount, tokenDecimals);
-        const recipientKeys = advancedRecipientMode
-          ? {
-              ownerPk: BigInt(recipientOwnerPk),
-              viewingPub: recipientViewingPub as `0x${string}`,
-            }
-          : decodeShieldedAddress(recipientShieldedAddress.trim());
-        if ("chainId" in recipientKeys && recipientKeys.chainId !== shieldedChainId) {
+        const recipientRaw = recipientShieldedAddress.trim();
+        let recipientKeys: {ownerPk: bigint; viewingPub: `0x${string}`; chainId?: number};
+        if (advancedRecipientMode) {
+          if (!recipientOwnerPk || !recipientViewingPub) {
+            throw new Error("Enter recipient owner_pk and viewing_pub in advanced mode.");
+          }
+          recipientKeys = {
+            ownerPk: BigInt(recipientOwnerPk),
+            viewingPub: recipientViewingPub as `0x${string}`,
+          };
+        } else if (recipientRaw.startsWith("shd_")) {
+          try {
+            recipientKeys = decodeShieldedAddress(recipientRaw);
+          } catch (e) {
+            throw new Error(e instanceof Error ? e.message : "Invalid shielded address.");
+          }
+        } else if (isValidViewingKey(recipientRaw)) {
+          throw new Error("Viewing key only is not supported in the extension yet — use a shd_… address or advanced mode.");
+        } else {
+          throw new Error("Enter a valid shielded address (shd_…) or use advanced recipient mode.");
+        }
+        if (recipientKeys.chainId != null && recipientKeys.chainId !== shieldedChainId) {
           throw new Error(
             `Shielded address chainId ${recipientKeys.chainId} does not match selected pool network (${shieldedChainId}).`
           );

@@ -53,7 +53,7 @@ export async function generateProof(params: {
 }) {
   const circuit = await loadCircuitArtifact();
   const noir = new Noir(circuit as never);
-  const backend = new UltraPlonkBackend((circuit as any).bytecode, {threads: 2} as any);
+  const backend = new UltraPlonkBackend(circuit.bytecode, {threads: 2});
   const inputs = {
     spending_key: toHex32(params.spendingKey),
     in_amounts: [params.inAmounts[0].toString(), params.inAmounts[1].toString()],
@@ -75,8 +75,9 @@ export async function generateProof(params: {
     unshield_token_address: ethers.zeroPadValue(params.unshieldTokenAddress ?? "0x00", 32),
   };
 
-  const witnessResult = await noir.execute(inputs as any);
-  const proofData = await (backend as any).generateProof(witnessResult.witness);
+  const witnessResult = await noir.execute(inputs as never);
+  const backendApi = backend as unknown as {generateProof: (witness: unknown) => Promise<unknown>};
+  const proofData = await backendApi.generateProof((witnessResult as {witness: unknown}).witness);
   const proofBytes = normalizeProofToBytes(proofData);
   return {
     proof: ethers.hexlify(proofBytes) as `0x${string}`,

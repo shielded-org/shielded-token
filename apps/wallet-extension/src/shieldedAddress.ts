@@ -14,10 +14,23 @@ function toBase64Url(bytes: Uint8Array): string {
   return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
+export function isValidViewingKey(value: string): boolean {
+  return /^0x[a-fA-F0-9]{16,130}$/.test(value.trim());
+}
+
 function fromBase64Url(text: string): Uint8Array {
-  const b64 = text.replace(/-/g, "+").replace(/_/g, "/");
+  const cleaned = text.trim().replace(/\s/g, "");
+  if (!/^[A-Za-z0-9_-]+$/.test(cleaned)) {
+    throw new Error("Invalid shielded address encoding (expected base64url characters).");
+  }
+  const b64 = cleaned.replace(/-/g, "+").replace(/_/g, "/");
   const padded = b64 + "===".slice((b64.length + 3) % 4);
-  const binary = atob(padded);
+  let binary: string;
+  try {
+    binary = atob(padded);
+  } catch {
+    throw new Error("Invalid shielded address encoding.");
+  }
   const out = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
   return out;
@@ -67,14 +80,28 @@ export function encodeShieldedAddress(params: {
   return `${PREFIX}${toBase64Url(full)}`;
 }
 
+export function tryDecodeShieldedAddress(address: string): {
+  ownerPk: bigint;
+  viewingPub: `0x${string}`;
+  chainId: number;
+  version: number;
+} | null {
+  try {
+    return decodeShieldedAddress(address);
+  } catch {
+    return null;
+  }
+}
+
 export function decodeShieldedAddress(address: string): {
   ownerPk: bigint;
   viewingPub: `0x${string}`;
   chainId: number;
   version: number;
 } {
-  if (!address.startsWith(PREFIX)) throw new Error("Invalid shielded address prefix.");
-  const raw = fromBase64Url(address.slice(PREFIX.length));
+  const trimmed = address.trim();
+  if (!trimmed.startsWith(PREFIX)) throw new Error("Invalid shielded address prefix (expected shd_…).");
+  const raw = fromBase64Url(trimmed.slice(PREFIX.length));
   if (raw.length !== PAYLOAD_BYTES + CHECKSUM_BYTES) {
     throw new Error("Invalid shielded address length.");
   }

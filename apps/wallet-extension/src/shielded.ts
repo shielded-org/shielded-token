@@ -1,5 +1,5 @@
 import {ethers} from "ethers";
-
+import {getLogsChunked} from "./eth-get-logs";
 import {POOL_ABI} from "./config";
 
 export type DecryptedNote = {
@@ -12,91 +12,6 @@ export type DecryptedNote = {
 
 function toHex32(v: bigint): `0x${string}` {
   return ethers.zeroPadValue(ethers.toBeHex(v), 32) as `0x${string}`;
-}
-
-async function ethGetLogsRange(
-  provider: ethers.JsonRpcProvider,
-  address: `0x${string}`,
-  topics: (string | string[] | null)[],
-  fromBlock: number,
-  toBlock: number
-): Promise<ethers.Log[]> {
-  if (fromBlock > toBlock) return [];
-  try {
-    return await provider.getLogs({address, fromBlock, toBlock, topics});
-  } catch (e) {
-    if (fromBlock === toBlock) throw e;
-    const mid = Math.floor((fromBlock + toBlock) / 2);
-    const left = await ethGetLogsRange(provider, address, topics, fromBlock, mid);
-    const right = await ethGetLogsRange(provider, address, topics, mid + 1, toBlock);
-    return [...left, ...right];
-  }
-}
-
-const DEFAULT_LOG_CHUNK_SIZES_DESC = [50_000, 20_000, 10_000, 5_000, 2_000, 1_000, 500] as const;
-
-function buildLogChunkTrySizes(explicitMax?: number): number[] {
-  if (explicitMax == null || !Number.isFinite(explicitMax) || explicitMax < 1) {
-    return [...new Set(DEFAULT_LOG_CHUNK_SIZES_DESC)].sort((a, b) => b - a);
-  }
-  const cap = Math.min(Math.floor(explicitMax), 500_000);
-  const fromExplicit: number[] = [];
-  let c = cap;
-  while (c >= 500) {
-    if (!fromExplicit.includes(c)) fromExplicit.push(c);
-    c = Math.floor(c / 2);
-  }
-  if (!fromExplicit.includes(500)) fromExplicit.push(500);
-  const merged = [...fromExplicit, ...DEFAULT_LOG_CHUNK_SIZES_DESC];
-  const seen = new Set<number>();
-  const out: number[] = [];
-  for (const n of merged) {
-    const v = Math.max(1, Math.floor(n));
-    if (seen.has(v)) continue;
-    seen.add(v);
-    out.push(v);
-  }
-  return out;
-}
-
-async function getLogsChunked(params: {
-  provider: ethers.JsonRpcProvider;
-  address: `0x${string}`;
-  fromBlock: number;
-  toBlock: number;
-  topics: (string | string[] | null)[];
-  chunkSize?: number;
-}) {
-  const trySizes = buildLogChunkTrySizes(params.chunkSize);
-  const out: ethers.Log[] = [];
-  let start = params.fromBlock;
-  while (start <= params.toBlock) {
-    let stepped = false;
-    for (const chunkSize of trySizes) {
-      const end = Math.min(start + chunkSize - 1, params.toBlock);
-      try {
-        const part = await params.provider.getLogs({
-          address: params.address,
-          fromBlock: start,
-          toBlock: end,
-          topics: params.topics,
-        });
-        out.push(...part);
-        start = end + 1;
-        stepped = true;
-        break;
-      } catch {
-        /* try smaller span */
-      }
-    }
-    if (!stepped) {
-      const end = Math.min(start + 500 - 1, params.toBlock);
-      const part = await ethGetLogsRange(params.provider, params.address, params.topics, start, end);
-      out.push(...part);
-      start = end + 1;
-    }
-  }
-  return out;
 }
 
 export function decryptNoteECDH(encryptedNoteHex: `0x${string}`, recipientViewingPriv: bigint) {
@@ -112,10 +27,7 @@ export function decryptNoteECDH(encryptedNoteHex: `0x${string}`, recipientViewin
   if (envelope.v !== 1) return null;
   const key = new ethers.SigningKey(toHex32(recipientViewingPriv));
   const sharedSecretHex = key.computeSharedSecret(envelope.eph);
-  return {
-    envelope,
-    sharedSecretHex,
-  } as const;
+  return {envelope, sharedSecretHex} as const;
 }
 
 function bytesFromHex(hex: `0x${string}`): Uint8Array {
@@ -136,15 +48,7 @@ async function hkdfSha256(ikm: Uint8Array, salt: Uint8Array, info: Uint8Array, l
   return new Uint8Array(bits);
 }
 
-export async function decryptEnvelope(
-  encryptedNoteHex: `0x${string}`,
-  recipientViewingPriv: bigint
-): Promise<{
-  token: `0x${string}`;
-  amount: string;
-  blinding: `0x${string}`;
-  commitment: `0x${string}`;
-} | null> {
+export async function decryptEnvelope(encryptedNoteHex: `0x${string}`, recipientViewingPriv: bigint) {
   try {
     const pre = decryptNoteECDH(encryptedNoteHex, recipientViewingPriv);
     if (!pre) return null;
@@ -186,30 +90,39 @@ export async function scanShieldedNotes(params: {
   fromBlock: number;
   viewingPriv: bigint;
   viewingPub: `0x${string}`;
+  logChunkSize?: number;
+  debugRpcLabel?: string;
 }) {
   const iface = new ethers.Interface(POOL_ABI);
   const event = iface.getEvent("RoutedCommitment");
   if (!event) {
     return {
       notes: [] as DecryptedNote[],
-      stats: {
-        channel: ethers.ZeroHash as `0x${string}`,
-        latestBlock: 0,
-        totalLogs: 0,
-        decryptSuccess: 0,
-      },
+      stats: {channel: ethers.ZeroHash as `0x${string}`, latestBlock: 0, totalLogs: 0, decryptSuccess: 0},
     };
   }
   const topic = event.topicHash;
   const channel = ethers.keccak256(params.viewingPub);
   const latestBlock = await params.provider.getBlockNumber();
+  if (params.fromBlock > latestBlock) {
+    console.warn("[shielded-scan] fromBlock > chain head", {
+      pool: params.poolAddress,
+      fromBlock: params.fromBlock,
+      latestBlock,
+      rpc: params.debugRpcLabel ?? "(unknown)",
+    });
+    return {
+      notes: [] as DecryptedNote[],
+      stats: {channel: channel as `0x${string}`, latestBlock, totalLogs: 0, decryptSuccess: 0},
+    };
+  }
   const logs = await getLogsChunked({
     provider: params.provider,
     address: params.poolAddress,
     fromBlock: params.fromBlock,
     toBlock: latestBlock,
     topics: [topic, channel],
-    chunkSize: 50_000,
+    chunkSize: params.logChunkSize,
   });
   const notes: DecryptedNote[] = [];
   let decryptSuccess = 0;

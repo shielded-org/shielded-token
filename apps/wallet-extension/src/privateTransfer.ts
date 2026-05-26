@@ -1,10 +1,11 @@
 import {ethers} from "ethers";
 
 import {POOL_ABI, POSEIDON_ABI} from "./config";
-import {CHAIN_ID_ETH_SEPOLIA, getShieldedNetwork, type ShieldedChainId} from "./networks";
-import {buildInputMerklePaths, buildMerklePathForCommitment} from "./merkle";
+import {CHAIN_ID_ARBITRUM_SEPOLIA, CHAIN_ID_BASE_SEPOLIA, CHAIN_ID_ETH_SEPOLIA, getShieldedNetwork, type ShieldedChainId} from "./networks";
+import {buildMerklePathForCommitment} from "./merkle";
 import {generateProof, generateUnshieldProof} from "./proving";
-import {scanShieldedNotes} from "./shielded";
+import {getWorkingReadProvider} from "./rpc-read";
+import {scanShieldedNotesWithRpcFallback} from "./shielded-integration";
 import type {DecryptedNote} from "./shielded";
 
 function toHex32(v: bigint): `0x${string}` {
@@ -28,6 +29,34 @@ function requireNet(chainId: ShieldedChainId) {
   const net = getShieldedNetwork(chainId);
   if (!net) throw new Error(`Unknown shielded chainId ${chainId}`);
   return net;
+}
+
+function rpcEnvHintForChain(chainId: number): string {
+  if (chainId === CHAIN_ID_ARBITRUM_SEPOLIA) return "RELAYER_RPC_URL_ARBITRUM_SEPOLIA";
+  if (chainId === CHAIN_ID_BASE_SEPOLIA) return "RELAYER_RPC_URL_BASE_SEPOLIA";
+  if (chainId === CHAIN_ID_ETH_SEPOLIA) return "RELAYER_RPC_URL_ETH_SEPOLIA (or RELAYER_RPC_URL)";
+  return "RELAYER_RPC_URL_* for this chain id";
+}
+
+function formatRelayerFetchFailure(relayerUrl: string, chainId: number, cause: unknown): string {
+  const net = getShieldedNetwork(chainId);
+  const label = net?.label ?? `chain id ${chainId}`;
+  const rpcEnv = rpcEnvHintForChain(chainId);
+  let detail: string;
+  if (cause instanceof Error) {
+    detail =
+      cause.name === "AbortError" || /aborted/i.test(cause.message)
+        ? "request timed out or was aborted"
+        : cause.message;
+  } else {
+    detail = String(cause);
+  }
+  return [
+    `Cannot reach relayer at ${relayerUrl} (${label}).`,
+    `Ensure the relayer is running and extension host_permissions include this URL.`,
+    `Relayer needs ${rpcEnv} configured for on-chain submission.`,
+    `Underlying: ${detail}`,
+  ].join(" ");
 }
 
 function routeForRecipient(viewingPubHex: `0x${string}`, subchannelId: number) {
@@ -119,7 +148,7 @@ export async function executePrivateTransfer(params: {
   const startedAt = Date.now();
   const mark = (msg: string) => status(`${msg} (+${((Date.now() - startedAt) / 1000).toFixed(1)}s)`);
 
-  const provider = new ethers.JsonRpcProvider(net.rpcUrl, net.id);
+  const provider = await getWorkingReadProvider(net);
   const poseidon = new ethers.Contract(net.contracts.poseidon, POSEIDON_ABI, provider);
   const pool = new ethers.Contract(net.contracts.pool, POOL_ABI, provider);
   const selectedToken = params.tokenAddress ?? net.contracts.token;
@@ -127,8 +156,7 @@ export async function executePrivateTransfer(params: {
   const tokenFieldNorm = tokenField.toLowerCase();
   const scanFromBlock = params.scanFromBlock ?? net.poolDeployBlock;
   mark(`Scanning shielded notes from block ${scanFromBlock}`);
-  const scan = await scanShieldedNotes({
-    provider,
+  const scan = await scanShieldedNotesWithRpcFallback(net, {
     poolAddress: net.contracts.pool,
     fromBlock: scanFromBlock,
     viewingPriv: params.senderViewingPriv,
@@ -138,8 +166,8 @@ export async function executePrivateTransfer(params: {
   const dedup = new Map<string, DecryptedNote>();
   for (const n of merged) dedup.set(`${n.commitment}:${n.txHash}`, n);
   const discovered = Array.from(dedup.values());
-  mark(`Discovered notes=${discovered.length} (new ${scan.notes.length})`);
-  const spendable = [];
+  mark("Checking spend status of discovered notes…");
+  const spendable: DecryptedNote[] = [];
   for (const note of discovered) {
     const noteTokenField = normalizeTokenField(note.token);
     if (!noteTokenField || noteTokenField !== tokenFieldNorm) continue;
@@ -147,98 +175,48 @@ export async function executePrivateTransfer(params: {
     const isSpent = await pool.nullifierSet(nf);
     if (!isSpent) spendable.push(note);
   }
-  if (spendable.length < 1) {
-    throw new Error("Need at least 1 unspent note for private transfer.");
-  }
+  if (spendable.length < 1) throw new Error("Need at least 1 unspent note for private transfer.");
   spendable.sort((a, b) => (a.amount < b.amount ? -1 : a.amount > b.amount ? 1 : 0));
-  type Candidate = {
-    i: number;
-    j: number | null;
-    totalIn: bigint;
-    recipientAmount: bigint;
-    changeAmount: bigint;
-  };
-  const candidates: Candidate[] = [];
   const target = params.maxRecipientAmount ?? spendable[0].amount;
+  const candidate = spendable.find((n) => n.amount >= target);
+  if (!candidate) throw new Error("No available spendable note can satisfy the requested private amount.");
 
-  for (let i = 0; i < spendable.length; i += 1) {
-    const totalIn = spendable[i].amount;
-    if (totalIn >= target) {
-      const recipientAmount = target;
-      candidates.push({i, j: null, totalIn, recipientAmount, changeAmount: totalIn - recipientAmount});
-    }
-  }
-  for (let i = 0; i < spendable.length; i += 1) {
-    for (let j = i + 1; j < spendable.length; j += 1) {
-      const totalIn = spendable[i].amount + spendable[j].amount;
-      if (totalIn >= target) {
-        const recipientAmount = target;
-        candidates.push({i, j, totalIn, recipientAmount, changeAmount: totalIn - recipientAmount});
-      }
-    }
-  }
-  if (candidates.length === 0) {
-    throw new Error("No available spendable note combination can satisfy the requested private amount.");
-  }
-  let chosen: Candidate | null = null;
-  candidates.sort((a, b) => (a.changeAmount < b.changeAmount ? -1 : a.changeAmount > b.changeAmount ? 1 : 0));
-  chosen = candidates[0];
-  mark(`Spendable notes=${spendable.length}; preparing proof inputs`);
-  const in0 = spendable[chosen.i];
-  const in1 = chosen.j != null ? spendable[chosen.j] : null;
-  const totalIn = chosen.totalIn;
-  const recipientAmount = chosen.recipientAmount;
-  const changeAmount = chosen.changeAmount;
+  const recipientAmount = target;
+  const changeAmount = candidate.amount - recipientAmount;
   const outBlinding0 = BigInt(ethers.randomBytes(31).reduce((a, b) => (a << 8n) + BigInt(b), 0n) + 1n);
   const outBlinding1 = BigInt(ethers.randomBytes(31).reduce((a, b) => (a << 8n) + BigInt(b), 0n) + 1n);
-  const nullifier0 = await poseidonHash2(poseidon, params.senderSpendingKey, BigInt(in0.commitment));
-  const nullifier1 = in1
-    ? await poseidonHash2(poseidon, params.senderSpendingKey, BigInt(in1.commitment))
-    : ("0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`);
+  const nullifier0 = await poseidonHash2(poseidon, params.senderSpendingKey, BigInt(candidate.commitment));
+  const nullifier1 = "0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`;
   const outCommitment0 = await noteCommitment(poseidon, params.recipientOwnerPk, tokenField, recipientAmount, outBlinding0);
   const outCommitment1 = await noteCommitment(poseidon, params.senderOwnerPk, tokenField, changeAmount, outBlinding1);
-  const merkle = in1
-    ? await buildInputMerklePaths({
-        provider,
-        poseidonAddress: net.contracts.poseidon,
-        merkleTreeAddress: net.contracts.merkleTree,
-        targetCommitments: [in0.commitment, in1.commitment],
-        poolDeployBlock: net.poolDeployBlock,
-      })
-    : (() => null)();
-  const merkleSingle = !in1
-    ? await buildMerklePathForCommitment({
-        provider,
-        poseidonAddress: net.contracts.poseidon,
-        merkleTreeAddress: net.contracts.merkleTree,
-        targetCommitment: in0.commitment,
-        poolDeployBlock: net.poolDeployBlock,
-      })
-    : null;
+  mark("Loading Merkle tree (LeafInserted logs) — can take a while on L2 RPCs…");
+  const merkleSingle = await buildMerklePathForCommitment({
+    provider,
+    poseidonAddress: net.contracts.poseidon,
+    merkleTreeAddress: net.contracts.merkleTree,
+    targetCommitment: candidate.commitment,
+    poolDeployBlock: net.poolDeployBlock,
+  });
   const zero32 = "0x0000000000000000000000000000000000000000000000000000000000000000" as `0x${string}`;
   const zeroPath = new Array(20).fill(zero32) as `0x${string}`[];
   const zeroDirs = new Array(20).fill(false) as boolean[];
-  const merkleRoot = in1 ? merkle!.root : merkleSingle!.root;
-  mark("Generating proof");
+  mark("Generating zero-knowledge proof in-browser — keep this popup open…");
   const proof = await generateProof({
     spendingKey: params.senderSpendingKey,
-    inAmounts: [in0.amount, in1 ? in1.amount : 0n],
-    inBlindings: [in0.blinding, in1 ? in1.blinding : zero32],
-    merkleSiblings: [in1 ? merkle!.siblings[0] : merkleSingle!.siblings, in1 ? merkle!.siblings[1] : zeroPath],
-    merkleDirections: [in1 ? merkle!.directions[0] : merkleSingle!.directions, in1 ? merkle!.directions[1] : zeroDirs],
+    inAmounts: [candidate.amount, 0n],
+    inBlindings: [candidate.blinding, zero32],
+    merkleSiblings: [merkleSingle.siblings, zeroPath],
+    merkleDirections: [merkleSingle.directions, zeroDirs],
     outAmounts: [recipientAmount, changeAmount],
     outRecipientPks: [toHex32(params.recipientOwnerPk), toHex32(params.senderOwnerPk)],
     outBlindings: [toHex32(outBlinding0), toHex32(outBlinding1)],
     token: tokenField,
-    merkleRoot,
+    merkleRoot: merkleSingle.root,
     nullifiers: [nullifier0, nullifier1],
     outCommitments: [outCommitment0, outCommitment1],
     fee: 0n,
     feeRecipientPk: zero32,
   });
-  const proofBytes = ethers.getBytes(proof.proof).length;
-  const proofDigest = ethers.keccak256(proof.proof).slice(0, 18);
-  mark(`Proof generated bytes=${proofBytes} hash=${proofDigest}...; encrypting output notes`);
 
   const route0 = routeForRecipient(params.recipientViewingPub, 0);
   const route1 = routeForRecipient(params.senderViewingPub, 0);
@@ -269,7 +247,7 @@ export async function executePrivateTransfer(params: {
         encryptedNotes: [encryptedNote0, encryptedNote1],
         channels: [route0.channel, route1.channel],
         subchannels: [route0.subchannel, route1.subchannel],
-        merkleRoot,
+        merkleRoot: merkleSingle.root,
         token: tokenField,
         fee: "0",
         feeRecipientPk: zero32,
@@ -277,16 +255,7 @@ export async function executePrivateTransfer(params: {
       }),
     });
   } catch (err) {
-    if ((err as Error).name === "AbortError") {
-      throw new Error(`Relayer request timed out after ${relayerTimeoutMs}ms`);
-    }
-    if (err instanceof TypeError) {
-      throw new Error(
-        `Failed to reach relayer at ${params.relayerUrl}. ` +
-        `Ensure relayer is running and extension host permissions allow this URL.`
-      );
-    }
-    throw err;
+    throw new Error(formatRelayerFetchFailure(params.relayerUrl, chainId, err));
   } finally {
     clearTimeout(timeout);
   }
@@ -297,7 +266,7 @@ export async function executePrivateTransfer(params: {
     ...payload,
     recipientAmount: recipientAmount.toString(),
     fee: "0",
-    consumedCommitments: [in0.commitment, (in1?.commitment ?? zero32)] as [`0x${string}`, `0x${string}`],
+    consumedCommitments: [candidate.commitment, zero32] as [`0x${string}`, `0x${string}`],
   };
 }
 
@@ -323,7 +292,7 @@ export async function executeUnshield(params: {
   const startedAt = Date.now();
   const mark = (msg: string) => status(`${msg} (+${((Date.now() - startedAt) / 1000).toFixed(1)}s)`);
 
-  const provider = new ethers.JsonRpcProvider(net.rpcUrl, net.id);
+  const provider = await getWorkingReadProvider(net);
   const poseidon = new ethers.Contract(net.contracts.poseidon, POSEIDON_ABI, provider);
   const pool = new ethers.Contract(net.contracts.pool, POOL_ABI, provider);
   const selectedToken = params.tokenAddress ?? net.contracts.token;
@@ -332,8 +301,7 @@ export async function executeUnshield(params: {
   const scanFromBlock = params.scanFromBlock ?? net.poolDeployBlock;
 
   mark(`Scanning shielded notes from block ${scanFromBlock}`);
-  const scan = await scanShieldedNotes({
-    provider,
+  const scan = await scanShieldedNotesWithRpcFallback(net, {
     poolAddress: net.contracts.pool,
     fromBlock: scanFromBlock,
     viewingPriv: params.senderViewingPriv,
@@ -343,7 +311,7 @@ export async function executeUnshield(params: {
   const dedup = new Map<string, DecryptedNote>();
   for (const n of merged) dedup.set(`${n.commitment}:${n.txHash}`, n);
   const discovered = Array.from(dedup.values());
-  mark(`Discovered notes=${discovered.length} (new ${scan.notes.length})`);
+  mark("Checking spend status of candidate notes…");
 
   const candidates: DecryptedNote[] = [];
   for (const note of discovered) {
@@ -389,6 +357,7 @@ export async function executeUnshield(params: {
       : ("0x" as `0x${string}`);
   const changeRoute = routeForRecipient(params.senderViewingPub, 0);
   const nullifier = await poseidonHash2(poseidon, params.senderSpendingKey, BigInt(note.commitment));
+  mark("Loading Merkle tree for your withdrawal note…");
   const merkle = await buildMerklePathForCommitment({
     provider,
     poseidonAddress: net.contracts.poseidon,
@@ -397,7 +366,7 @@ export async function executeUnshield(params: {
     poolDeployBlock: net.poolDeployBlock,
   });
 
-  mark("Generating unshield proof");
+  mark("Generating unshield proof in-browser — keep this popup open…");
   const proof = await generateUnshieldProof({
     spendingKey: params.senderSpendingKey,
     inAmount: note.amount,
@@ -444,14 +413,7 @@ export async function executeUnshield(params: {
       }),
     });
   } catch (err) {
-    if ((err as Error).name === "AbortError") throw new Error(`Relayer request timed out after ${relayerTimeoutMs}ms`);
-    if (err instanceof TypeError) {
-      throw new Error(
-        `Failed to reach relayer at ${params.relayerUrl}. ` +
-        `Ensure relayer is running and extension host permissions allow this URL.`
-      );
-    }
-    throw err;
+    throw new Error(formatRelayerFetchFailure(params.relayerUrl, chainId, err));
   } finally {
     clearTimeout(timeout);
   }

@@ -1,5 +1,6 @@
 import {ethers} from "ethers";
 import {CHAIN_ID_ARBITRUM_SEPOLIA, CHAIN_ID_BASE_SEPOLIA, type ShieldedNetwork} from "./networks";
+import {runAlchemyJsonRpcSerialized} from "./premium-rpc-queue";
 
 function env(key: string): string | undefined {
   const raw = (import.meta as ImportMeta & {env: Record<string, string | undefined>}).env[key];
@@ -101,20 +102,22 @@ export async function getWorkingReadProvider(net: ShieldedNetwork): Promise<ethe
   let last: unknown;
   for (const url of urls) {
     try {
-      const provider = new ethers.JsonRpcProvider(url, net.id);
-      await provider.getBlockNumber();
-      const nw = await provider.getNetwork();
-      if (Number(nw.chainId) !== net.id) {
-        throw new Error(`RPC ${url} reports chainId ${nw.chainId}, expected ${net.id}`);
-      }
-      const poseidonAddr = net.contracts.poseidon;
-      if (poseidonAddr && poseidonAddr !== ethers.ZeroAddress) {
-        const code = await provider.getCode(poseidonAddr);
-        if (!code || code === "0x") {
-          throw new Error(`no contract code at Poseidon ${poseidonAddr} via ${url}`);
+      return await runAlchemyJsonRpcSerialized(url, async () => {
+        const provider = new ethers.JsonRpcProvider(url, net.id);
+        await provider.getBlockNumber();
+        const nw = await provider.getNetwork();
+        if (Number(nw.chainId) !== net.id) {
+          throw new Error(`RPC ${url} reports chainId ${nw.chainId}, expected ${net.id}`);
         }
-      }
-      return provider;
+        const poseidonAddr = net.contracts.poseidon;
+        if (poseidonAddr && poseidonAddr !== ethers.ZeroAddress) {
+          const code = await provider.getCode(poseidonAddr);
+          if (!code || code === "0x") {
+            throw new Error(`no contract code at Poseidon ${poseidonAddr} via ${url}`);
+          }
+        }
+        return provider;
+      });
     } catch (e) {
       last = e;
     }
