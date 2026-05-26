@@ -1,0 +1,15 @@
+# Render Blueprint — deploy relayer from monorepo root.
+# Dashboard: New → Blueprint, or link repo and apply this file.
+# Set secrets in Render UI: RELAYER_SIGNER_PRIVATE_KEYS, RELAYER_RPC_URL_* .
+
+services:
+  - type: web
+    name: shielded-relayer
+    runtime: node
+    rootDir: .
+    buildCommand: npm install
+    startCommand: npm run start --workspace @zkproject/relayer
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
