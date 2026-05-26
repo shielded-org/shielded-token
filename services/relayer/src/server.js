@@ -3,7 +3,8 @@ import {createHash, randomUUID} from "node:crypto";
 import http from "node:http";
 import {ethers} from "ethers";
 
-const port = Number(process.env.RELAYER_PORT || 8787);
+/** Render/Fly set PORT; local dev uses RELAYER_PORT (default 8787). */
+const port = Number(process.env.PORT || process.env.RELAYER_PORT || 8787);
 const host = "0.0.0.0";
 
 const CHAIN_ID_ETH_SEPOLIA = 11155111;
