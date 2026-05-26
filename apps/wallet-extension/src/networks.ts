@@ -113,7 +113,7 @@ const BASE_SEPOLIA_DEPLOYED = {
   ],
 } as const;
 
-const BASE_SEPOLIA_POOL = env("VITE_BASE_SEPOLIA_POOL_ADDRESS")?.trim() ?? "";
+const BASE_SEPOLIA_POOL = env("VITE_BASE_SEPOLIA_POOL_ADDRESS")?.trim() ?? BASE_SEPOLIA_CANONICAL_POOL;
 
 function baseSepoliaUsesDeployedContractSet(poolRaw: string): boolean {
   if (!poolRaw || !ethers.isAddress(poolRaw)) return false;
@@ -189,7 +189,7 @@ const ARBITRUM_SEPOLIA_DEPLOYED = {
   ],
 } as const;
 
-const ARBITRUM_SEPOLIA_POOL = env("VITE_ARBITRUM_SEPOLIA_POOL_ADDRESS")?.trim() ?? "";
+const ARBITRUM_SEPOLIA_POOL = env("VITE_ARBITRUM_SEPOLIA_POOL_ADDRESS")?.trim() ?? ARBITRUM_SEPOLIA_CANONICAL_POOL;
 
 function arbitrumSepoliaUsesDeployedContractSet(poolRaw: string): boolean {
   if (!poolRaw || !ethers.isAddress(poolRaw)) return false;

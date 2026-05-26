@@ -1,6 +1,7 @@
 import {ethers} from "ethers";
 
 import {MERKLE_ABI, POSEIDON_ABI} from "./config";
+import {getLogsChunked} from "./eth-get-logs";
 
 function toHex32(v: bigint): `0x${string}` {
   return ethers.zeroPadValue(ethers.toBeHex(v), 32) as `0x${string}`;
@@ -73,21 +74,14 @@ export async function loadAllLeaves(
   if (!event) return [];
   const topic = event.topicHash;
   const latest = await provider.getBlockNumber();
-  const logs: ethers.Log[] = [];
-  /** Many public RPCs (e.g. Base Sepolia) reject `eth_getLogs` spans over ~2000 blocks (-32602). */
-  const chunkBlocks = 2000;
-  let start = fromBlock;
-  while (start <= latest) {
-    const end = Math.min(start + chunkBlocks - 1, latest);
-    const part = await provider.getLogs({
-      address: merkleTreeAddress,
-      fromBlock: start,
-      toBlock: end,
-      topics: [topic],
-    });
-    logs.push(...part);
-    start = end + 1;
-  }
+  const logs = await getLogsChunked({
+    provider,
+    address: merkleTreeAddress,
+    fromBlock,
+    toBlock: latest,
+    topics: [topic],
+    chunkSize: 2000,
+  });
   const leaves: `0x${string}`[] = [];
   for (const log of logs) {
     const parsed = iface.parseLog(log);
