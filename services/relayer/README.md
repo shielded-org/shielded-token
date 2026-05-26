@@ -14,7 +14,7 @@ From monorepo root:
 npm run dev --workspace @zkproject/relayer
 ```
 
-From `services/relayer` alone (matches Render):
+From `services/relayer` (same as Render):
 
 ```bash
 npm ci && npm start
@@ -22,15 +22,23 @@ npm ci && npm start
 
 ## Deploy on Render
 
+**You must set Root Directory in the dashboard** (Settings → Root Directory):
+
+```text
+services/relayer
+```
+
+If Root Directory is empty, Render runs `npm ci` at the **repo root** and fails with `npm error Invalid Version`. The `rootDir` in `render.yaml` only applies when the service is managed by a synced Blueprint.
+
 | Setting | Value |
 | --- | --- |
 | **Root Directory** | `services/relayer` |
 | **Build Command** | `npm ci` |
 | **Start Command** | `npm start` |
 
-Do **not** run `npm install` at the **repository root** for the relayer — the root lockfile includes the web app and can fail with `npm error Invalid Version`.
+**Docker alternative:** Runtime = Docker, Root Directory = `services/relayer`, Dockerfile = `Dockerfile`.
 
-`PORT` is set by Render automatically. Add `RELAYER_SIGNER_PRIVATE_KEYS` and `RELAYER_RPC_URL_*` in the dashboard.
+Set `RELAYER_SIGNER_PRIVATE_KEYS` and `RELAYER_RPC_URL_*` in Environment. Use `https://<host>/healthz` to confirm `onchain` mode.
 
 ## Environment
 
